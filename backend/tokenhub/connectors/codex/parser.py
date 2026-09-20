@@ -1,8 +1,10 @@
 """Streaming parser for approved Codex session usage records."""
 
 import json
+import os
+import stat
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from tokenhub.domain.models import (
@@ -11,6 +13,7 @@ from tokenhub.domain.models import (
     SourceDescriptor,
     UsageEvent,
 )
+from tokenhub.security.paths import validate_source_path
 
 _MISSING = object()
 
@@ -32,7 +35,7 @@ def parse_codex_jsonl(source: SourceDescriptor, start_offset: int) -> ParsedCode
     unsupported_records = 0
     partial_final_record = False
 
-    with source.canonical_path.open("rb") as session_file:
+    with os.fdopen(_open_approved_source(source), "rb") as session_file:
         session_file.seek(start_offset)
         while raw_line := session_file.readline():
             if not raw_line.endswith(b"\n"):
@@ -114,7 +117,7 @@ def _parse_timestamp(value: Any) -> datetime | None:
         timestamp = datetime.fromisoformat(value)
     except ValueError:
         return None
-    return timestamp if timestamp.tzinfo is not None else None
+    return timestamp.astimezone(UTC) if timestamp.tzinfo is not None else None
 
 
 def _optional_token(usage: dict[str, Any], field: str) -> int | None:
@@ -124,3 +127,27 @@ def _optional_token(usage: dict[str, Any], field: str) -> int | None:
     if type(value) is not int or value < 0:
         raise ValueError(f"{field} must be a nonnegative integer")
     return value
+
+
+def _open_approved_source(source: SourceDescriptor) -> int:
+    """Open only an in-root regular file without following a final symlink."""
+    try:
+        validate_source_path(source.canonical_path, source.approved_root)
+        if not stat.S_ISREG(source.canonical_path.lstat().st_mode):
+            raise ValueError("source is not a regular file")
+    except (OSError, ValueError) as error:
+        raise ValueError("approved source cannot be opened safely") from error
+
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(source.canonical_path, flags)
+    except OSError as error:
+        raise ValueError("approved source cannot be opened safely") from error
+
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("source is not a regular file")
+    except (OSError, ValueError) as error:
+        os.close(descriptor)
+        raise ValueError("approved source cannot be opened safely") from error
+    return descriptor

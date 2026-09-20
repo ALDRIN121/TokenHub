@@ -1,5 +1,7 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from tokenhub.connectors.codex.parser import parse_codex_jsonl
 from tokenhub.domain.models import (
     MeasurementType,
@@ -140,3 +142,55 @@ def test_parser_rejects_explicit_null_token_values(tmp_path: Path) -> None:
 
     assert [event.record_identity for event in result.events] == ["1"]
     assert result.unsupported_records == 1
+
+
+def test_parser_rejects_source_swapped_for_outside_symlink(tmp_path: Path) -> None:
+    """Fails if scan-time opening follows a replacement symlink outside approval."""
+    approved_root = tmp_path / "approved"
+    approved_root.mkdir()
+    source_path = approved_root / "session.jsonl"
+    source_path.write_bytes((FIXTURES / "normal.jsonl").read_bytes())
+    outside_path = tmp_path / "outside.jsonl"
+    outside_path.write_bytes(
+        (FIXTURES / "normal.jsonl").read_bytes().replace(b'"ordinal":1', b'"ordinal":99')
+    )
+    source = SourceDescriptor(
+        source_id="codex-local:synthetic-fingerprint",
+        connector_id="codex-local",
+        provider=Provider.CODEX,
+        display_name="Codex session",
+        canonical_path=source_path,
+        approved_root=approved_root,
+        source_type="jsonl",
+        path_fingerprint="synthetic-fingerprint",
+    )
+    source_path.unlink()
+    source_path.symlink_to(outside_path)
+
+    with pytest.raises(ValueError, match="approved source cannot be opened safely"):
+        parse_codex_jsonl(source, start_offset=0)
+
+
+def test_parser_normalizes_timestamp_offsets_to_utc(tmp_path: Path) -> None:
+    """Fails if accepted timestamps retain a source timezone offset."""
+    path = tmp_path / "synthetic.jsonl"
+    path.write_bytes(
+        b'{"ordinal":1,"timestamp":"2026-09-20T10:00:00+05:30",'
+        b'"type":"token_usage_record","payload":{"usage":{"input_tokens":100,'
+        b'"output_tokens":25}}}\n'
+    )
+    source = SourceDescriptor(
+        source_id="codex-local:synthetic-fingerprint",
+        connector_id="codex-local",
+        provider=Provider.CODEX,
+        display_name="Codex session",
+        canonical_path=path,
+        approved_root=tmp_path,
+        source_type="jsonl",
+        path_fingerprint="synthetic-fingerprint",
+    )
+
+    result = parse_codex_jsonl(source, start_offset=0)
+
+    assert result.events[0].timestamp == datetime(2026, 9, 20, 4, 30, tzinfo=UTC)
+    assert result.events[0].timestamp.tzinfo is UTC
