@@ -5,6 +5,7 @@ import os
 import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from tokenhub.domain.models import (
@@ -13,7 +14,6 @@ from tokenhub.domain.models import (
     SourceDescriptor,
     UsageEvent,
 )
-from tokenhub.security.paths import validate_source_path
 
 _MISSING = object()
 
@@ -115,9 +115,9 @@ def _parse_timestamp(value: Any) -> datetime | None:
         return None
     try:
         timestamp = datetime.fromisoformat(value)
-    except ValueError:
+        return timestamp.astimezone(UTC) if timestamp.tzinfo is not None else None
+    except (OverflowError, ValueError):
         return None
-    return timestamp.astimezone(UTC) if timestamp.tzinfo is not None else None
 
 
 def _optional_token(usage: dict[str, Any], field: str) -> int | None:
@@ -130,24 +130,57 @@ def _optional_token(usage: dict[str, Any], field: str) -> int | None:
 
 
 def _open_approved_source(source: SourceDescriptor) -> int:
-    """Open only an in-root regular file without following a final symlink."""
+    """Open an approved regular file by descending from its root descriptor."""
+    relative_path = _lexical_relative_path(source)
     try:
-        validate_source_path(source.canonical_path, source.approved_root)
-        if not stat.S_ISREG(source.canonical_path.lstat().st_mode):
-            raise ValueError("source is not a regular file")
+        root_descriptor = _open_directory(source.approved_root)
     except (OSError, ValueError) as error:
         raise ValueError("approved source cannot be opened safely") from error
 
-    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(source.canonical_path, flags)
-    except OSError as error:
+        directory_descriptors = [root_descriptor]
+        for component in relative_path.parts[:-1]:
+            directory_descriptors.append(_open_directory(component, directory_descriptors[-1]))
+        return _open_regular_file(relative_path.name, directory_descriptors[-1])
+    except (OSError, ValueError) as error:
         raise ValueError("approved source cannot be opened safely") from error
+    finally:
+        for descriptor in reversed(directory_descriptors):
+            os.close(descriptor)
 
+
+def _lexical_relative_path(source: SourceDescriptor) -> Path:
+    """Return a source path relative to its root without resolving any symlinks."""
+    try:
+        relative_path = source.canonical_path.relative_to(source.approved_root)
+    except ValueError as error:
+        raise ValueError("approved source cannot be opened safely") from error
+    if not relative_path.parts or ".." in source.canonical_path.parts:
+        raise ValueError("approved source cannot be opened safely")
+    return relative_path
+
+
+def _open_directory(path: Path | str, parent_descriptor: int | None = None) -> int:
+    """Open one non-symlink directory and verify its descriptor type."""
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, dir_fd=parent_descriptor)
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ValueError("source is not a directory")
+    except (OSError, ValueError):
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _open_regular_file(name: str, parent_descriptor: int) -> int:
+    """Open one nonblocking, non-symlink file and verify its descriptor type."""
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(name, flags, dir_fd=parent_descriptor)
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise ValueError("source is not a regular file")
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError):
         os.close(descriptor)
-        raise ValueError("approved source cannot be opened safely") from error
+        raise
     return descriptor

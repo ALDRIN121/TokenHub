@@ -1,7 +1,9 @@
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import tokenhub.connectors.codex.parser as codex_parser
 from tokenhub.connectors.codex.parser import parse_codex_jsonl
 from tokenhub.domain.models import (
     MeasurementType,
@@ -194,3 +196,79 @@ def test_parser_normalizes_timestamp_offsets_to_utc(tmp_path: Path) -> None:
 
     assert result.events[0].timestamp == datetime(2026, 9, 20, 4, 30, tzinfo=UTC)
     assert result.events[0].timestamp.tzinfo is UTC
+
+
+def test_parser_rejects_ancestor_swapped_after_approved_root_opens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fails if a child path can escape after the approved root descriptor opens."""
+    approved_root = tmp_path / "approved"
+    nested = approved_root / "nested"
+    nested.mkdir(parents=True)
+    source_path = nested / "session.jsonl"
+    source_path.write_bytes((FIXTURES / "normal.jsonl").read_bytes())
+    outside_nested = tmp_path / "outside" / "nested"
+    outside_nested.mkdir(parents=True)
+    (outside_nested / "session.jsonl").write_bytes(
+        (FIXTURES / "normal.jsonl").read_bytes().replace(b'"ordinal":1', b'"ordinal":99')
+    )
+    source = SourceDescriptor(
+        source_id="codex-local:synthetic-fingerprint",
+        connector_id="codex-local",
+        provider=Provider.CODEX,
+        display_name="Codex session",
+        canonical_path=source_path,
+        approved_root=approved_root,
+        source_type="jsonl",
+        path_fingerprint="synthetic-fingerprint",
+    )
+    original_open = os.open
+    swapped = False
+
+    def swap_after_root_open(
+        path: str | bytes | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+        lexical_path = Path(os.fsdecode(path)) if isinstance(path, bytes) else Path(path)
+        if lexical_path == approved_root and dir_fd is None and not swapped:
+            nested.rename(tmp_path / "original-nested")
+            nested.symlink_to(outside_nested, target_is_directory=True)
+            swapped = True
+        return descriptor
+
+    monkeypatch.setattr(codex_parser.os, "open", swap_after_root_open)
+
+    with pytest.raises(ValueError, match="approved source cannot be opened safely"):
+        parse_codex_jsonl(source, start_offset=0)
+    assert swapped is True
+
+
+def test_parser_skips_timestamp_that_overflows_during_utc_conversion(tmp_path: Path) -> None:
+    """Fails if an unrepresentable UTC conversion aborts the completed-record scan."""
+    path = tmp_path / "synthetic.jsonl"
+    path.write_bytes(
+        (FIXTURES / "normal.jsonl").read_bytes()
+        + b'{"ordinal":2,"timestamp":"0001-01-01T00:00:00+14:00",'
+        b'"type":"token_usage_record","payload":{"usage":{"input_tokens":10,'
+        b'"output_tokens":5}}}\n'
+    )
+    source = SourceDescriptor(
+        source_id="codex-local:synthetic-fingerprint",
+        connector_id="codex-local",
+        provider=Provider.CODEX,
+        display_name="Codex session",
+        canonical_path=path,
+        approved_root=tmp_path,
+        source_type="jsonl",
+        path_fingerprint="synthetic-fingerprint",
+    )
+
+    result = parse_codex_jsonl(source, start_offset=0)
+
+    assert [event.record_identity for event in result.events] == ["1"]
+    assert result.unsupported_records == 1
