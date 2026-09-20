@@ -57,7 +57,11 @@ class SourceRepository:
                 .values(**values)
                 .on_conflict_do_update(
                     index_elements=["source_id"],
-                    set_={key: value for key, value in values.items() if key != "source_id"},
+                    set_={
+                        key: value
+                        for key, value in values.items()
+                        if key not in {"source_id", "state"}
+                    },
                 )
             )
             source = self._source(candidate.source_id)

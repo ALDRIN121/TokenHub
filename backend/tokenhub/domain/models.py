@@ -83,6 +83,21 @@ class SourceDescriptor:
     scan_supported: bool = False
     parser_version: str | None = None
 
+    def safe_view(self) -> dict[str, str | bool | tuple[str, ...] | None]:
+        """Project only public discovery metadata, never filesystem paths."""
+        return {
+            "source_id": self.source_id,
+            "connector_id": self.connector_id,
+            "provider": self.provider.value,
+            "display_name": self.display_name,
+            "source_type": self.source_type,
+            "path_fingerprint": self.path_fingerprint,
+            "state": self.state.value,
+            "evidence_codes": self.evidence_codes,
+            "scan_supported": self.scan_supported,
+            "parser_version": self.parser_version,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class SyncCursor:
