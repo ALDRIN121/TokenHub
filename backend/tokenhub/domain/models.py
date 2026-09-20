@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from pathlib import Path
 
 
 class Provider(StrEnum):
@@ -63,3 +64,42 @@ class UsageEvent:
         if self.input_total_tokens is None or self.output_total_tokens is None:
             return None
         return self.input_total_tokens + self.output_total_tokens
+
+
+@dataclass(frozen=True, slots=True)
+class SourceDescriptor:
+    """A discovered source whose paths remain outside persistent storage until approval."""
+
+    source_id: str
+    connector_id: str
+    provider: Provider
+    display_name: str
+    canonical_path: Path
+    approved_root: Path
+    source_type: str
+    path_fingerprint: str
+    state: SourceState = SourceState.DISCOVERED
+    evidence_codes: tuple[str, ...] = ()
+    scan_supported: bool = False
+    parser_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SyncCursor:
+    """The next safe position for an incremental source scan."""
+
+    source_id: str
+    byte_offset: int
+    source_mtime_ns: int | None
+    parser_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class ImportOutcome:
+    """The durable outcome of persisting one scan."""
+
+    inserted_events: int
+    duplicate_events: int
+    cursor: SyncCursor
+    partial_final_record: bool = False
+    unsupported_records: int = 0
