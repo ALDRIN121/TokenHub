@@ -16,6 +16,11 @@ from tokenhub.domain.models import (
 )
 
 _MISSING = object()
+_SECURE_DIR_FD_TRAVERSAL = (
+    os.open in os.supports_dir_fd
+    and bool(getattr(os, "O_DIRECTORY", 0))
+    and bool(getattr(os, "O_NOFOLLOW", 0))
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,9 +136,10 @@ def _optional_token(usage: dict[str, Any], field: str) -> int | None:
 
 def _open_approved_source(source: SourceDescriptor) -> int:
     """Open an approved regular file by descending from its root descriptor."""
+    _require_secure_directory_traversal()
     relative_path = _lexical_relative_path(source)
     try:
-        root_descriptor = _open_directory(source.approved_root)
+        root_descriptor = _open_approved_root(source.approved_root)
     except (OSError, ValueError) as error:
         raise ValueError("approved source cannot be opened safely") from error
 
@@ -151,18 +157,46 @@ def _open_approved_source(source: SourceDescriptor) -> int:
 
 def _lexical_relative_path(source: SourceDescriptor) -> Path:
     """Return a source path relative to its root without resolving any symlinks."""
+    if not _is_absolute_clean_path(source.approved_root) or not _is_absolute_clean_path(
+        source.canonical_path
+    ):
+        raise ValueError("approved source cannot be opened safely")
     try:
         relative_path = source.canonical_path.relative_to(source.approved_root)
     except ValueError as error:
         raise ValueError("approved source cannot be opened safely") from error
-    if not relative_path.parts or ".." in source.canonical_path.parts:
+    if not relative_path.parts:
         raise ValueError("approved source cannot be opened safely")
     return relative_path
 
 
+def _require_secure_directory_traversal() -> None:
+    """Reject platforms that cannot safely constrain descriptor-relative traversal."""
+    if not _SECURE_DIR_FD_TRAVERSAL:
+        raise ValueError("approved source cannot be opened safely")
+
+
+def _open_approved_root(root: Path) -> int:
+    """Open an absolute root from ``/`` without following any path component."""
+    descriptor = _open_directory(Path("/"))
+    try:
+        for component in root.parts[1:]:
+            child_descriptor = _open_directory(component, descriptor)
+            os.close(descriptor)
+            descriptor = child_descriptor
+        return descriptor
+    except (OSError, ValueError):
+        os.close(descriptor)
+        raise
+
+
+def _is_absolute_clean_path(path: Path) -> bool:
+    return path.is_absolute() and all(part not in {".", ".."} for part in path.parts)
+
+
 def _open_directory(path: Path | str, parent_descriptor: int | None = None) -> int:
     """Open one non-symlink directory and verify its descriptor type."""
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     descriptor = os.open(path, flags, dir_fd=parent_descriptor)
     try:
         if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
@@ -175,7 +209,7 @@ def _open_directory(path: Path | str, parent_descriptor: int | None = None) -> i
 
 def _open_regular_file(name: str, parent_descriptor: int) -> int:
     """Open one nonblocking, non-symlink file and verify its descriptor type."""
-    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
     descriptor = os.open(name, flags, dir_fd=parent_descriptor)
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):

@@ -235,7 +235,7 @@ def test_parser_rejects_ancestor_swapped_after_approved_root_opens(
         nonlocal swapped
         descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
         lexical_path = Path(os.fsdecode(path)) if isinstance(path, bytes) else Path(path)
-        if lexical_path == approved_root and dir_fd is None and not swapped:
+        if lexical_path == Path(approved_root.name) and dir_fd is not None and not swapped:
             nested.rename(tmp_path / "original-nested")
             nested.symlink_to(outside_nested, target_is_directory=True)
             swapped = True
@@ -272,3 +272,56 @@ def test_parser_skips_timestamp_that_overflows_during_utc_conversion(tmp_path: P
 
     assert [event.record_identity for event in result.events] == ["1"]
     assert result.unsupported_records == 1
+
+
+def test_parser_rejects_approved_root_ancestor_swapped_during_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fails if an ancestor swap redirects an absolute approved-root open."""
+    mutable_parent = tmp_path / "mutable-parent"
+    approved_root = mutable_parent / "approved"
+    nested = approved_root / "nested"
+    nested.mkdir(parents=True)
+    source_path = nested / "session.jsonl"
+    source_path.write_bytes((FIXTURES / "normal.jsonl").read_bytes())
+    outside_parent = tmp_path / "outside-parent"
+    outside_nested = outside_parent / "approved" / "nested"
+    outside_nested.mkdir(parents=True)
+    (outside_nested / "session.jsonl").write_bytes(
+        (FIXTURES / "normal.jsonl").read_bytes().replace(b'"ordinal":1', b'"ordinal":99')
+    )
+    source = SourceDescriptor(
+        source_id="codex-local:synthetic-fingerprint",
+        connector_id="codex-local",
+        provider=Provider.CODEX,
+        display_name="Codex session",
+        canonical_path=source_path,
+        approved_root=approved_root,
+        source_type="jsonl",
+        path_fingerprint="synthetic-fingerprint",
+    )
+    original_open = os.open
+    swapped = False
+
+    def swap_before_ancestor_open(
+        path: str | bytes | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        lexical_path = Path(os.fsdecode(path)) if isinstance(path, bytes) else Path(path)
+        old_open_point = lexical_path == approved_root and dir_fd is None
+        new_open_point = lexical_path == Path(mutable_parent.name) and dir_fd is not None
+        if (old_open_point or new_open_point) and not swapped:
+            mutable_parent.rename(tmp_path / "original-mutable-parent")
+            mutable_parent.symlink_to(outside_parent, target_is_directory=True)
+            swapped = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(codex_parser.os, "open", swap_before_ancestor_open)
+
+    with pytest.raises(ValueError, match="approved source cannot be opened safely"):
+        parse_codex_jsonl(source, start_offset=0)
+    assert swapped is True
