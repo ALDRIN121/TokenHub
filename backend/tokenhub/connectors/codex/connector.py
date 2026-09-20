@@ -54,7 +54,13 @@ class CodexConnector:
                 and not (Path(directory) / name).is_symlink()
             )
             for filename in sorted(filenames):
-                if filename == "history.jsonl" or not filename.endswith(".jsonl"):
+                if filename.casefold() in {
+                    "auth.jsonl",
+                    "cache.jsonl",
+                    "config.jsonl",
+                    "history.jsonl",
+                    "log.jsonl",
+                } or not filename.endswith(".jsonl"):
                     continue
                 path = Path(directory) / filename
                 if path.is_symlink() or not path.is_file():

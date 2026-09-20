@@ -38,35 +38,46 @@ class SourceRepository:
 
     def upsert_discovery(self, candidate: SourceDescriptor) -> SourceRecord:
         """Record safe discovery metadata without writing an absolute path."""
-        self._pending_candidates[candidate.source_id] = candidate
-        values = {
-            "source_id": candidate.source_id,
-            "connector_id": candidate.connector_id,
-            "provider": candidate.provider.value,
-            "display_name": candidate.display_name,
-            "source_type": candidate.source_type,
-            "path_fingerprint": candidate.path_fingerprint,
-            "state": candidate.state.value,
-            "evidence_codes": ",".join(candidate.evidence_codes),
-            "scan_supported": candidate.scan_supported,
-            "parser_version": candidate.parser_version,
-        }
+        return self.upsert_discoveries([candidate])[0]
+
+    def upsert_discoveries(self, candidates: list[SourceDescriptor]) -> list[SourceRecord]:
+        """Persist one connector's safe candidates atomically before caching them."""
+        if not candidates:
+            return []
+        sources: list[SourceRecord] = []
         with self.session.begin():
-            self.session.execute(
-                insert(SourceRecord)
-                .values(**values)
-                .on_conflict_do_update(
-                    index_elements=["source_id"],
-                    set_={
-                        key: value
-                        for key, value in values.items()
-                        if key not in {"source_id", "state"}
-                    },
+            for candidate in candidates:
+                values = {
+                    "source_id": candidate.source_id,
+                    "connector_id": candidate.connector_id,
+                    "provider": candidate.provider.value,
+                    "display_name": candidate.display_name,
+                    "source_type": candidate.source_type,
+                    "path_fingerprint": candidate.path_fingerprint,
+                    "state": candidate.state.value,
+                    "evidence_codes": ",".join(candidate.evidence_codes),
+                    "scan_supported": candidate.scan_supported,
+                    "parser_version": candidate.parser_version,
+                }
+                self.session.execute(
+                    insert(SourceRecord)
+                    .values(**values)
+                    .on_conflict_do_update(
+                        index_elements=["source_id"],
+                        set_={
+                            key: value
+                            for key, value in values.items()
+                            if key not in {"source_id", "state"}
+                        },
+                    )
                 )
-            )
-            source = self._source(candidate.source_id)
-            self.session.expunge(source)
-        return source
+                source = self._source(candidate.source_id)
+                self.session.expunge(source)
+                sources.append(source)
+        self._pending_candidates.update(
+            {candidate.source_id: candidate for candidate in candidates}
+        )
+        return sources
 
     def approve(self, source_id: str) -> SourceRecord:
         """Persist the validated discovery path only for a discovered source."""

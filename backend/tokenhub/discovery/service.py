@@ -30,15 +30,16 @@ class DiscoveryService:
                 continue
             try:
                 candidates = connector.discover_sources(self.context)
-                views: list[SafeSourceView] = []
-                for candidate in candidates:
-                    saved = self.source_repository.upsert_discovery(candidate)
-                    self._candidates[candidate.source_id] = candidate
-                    views.append(
-                        SafeSourceView.model_validate(
-                            {**candidate.safe_view(), "state": saved.state}
-                        )
+                saved_sources = self.source_repository.upsert_discoveries(candidates)
+                views: list[SafeSourceView] = [
+                    SafeSourceView.model_validate(
+                        {**candidate.safe_view(), "state": saved.state}
                     )
+                    for candidate, saved in zip(candidates, saved_sources, strict=True)
+                ]
+                self._candidates.update(
+                    {candidate.source_id: candidate for candidate in candidates}
+                )
                 result.sources = tuple(views)
             except Exception:  # noqa: BLE001 - keep other providers visible
                 result.state = SourceState.ERROR

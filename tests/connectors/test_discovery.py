@@ -4,16 +4,19 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from tokenhub.connectors.claude.connector import ClaudeConnector
 from tokenhub.connectors.codex.connector import CodexConnector
 from tokenhub.connectors.hermes.connector import HermesConnector
-from tokenhub.connectors.protocol import DiscoveryContext
+from tokenhub.connectors.protocol import DetectionResult, DiscoveryContext
 from tokenhub.connectors.registry import ConnectorRegistry
+from tokenhub.database.models import SourceRecord
 from tokenhub.database.repositories import SourceRepository
 from tokenhub.database.session import create_engine_for, initialize_database
 from tokenhub.discovery.service import DiscoveryService
-from tokenhub.domain.models import Provider, SourceState
+from tokenhub.domain.models import Provider, SourceDescriptor, SourceState
 from tokenhub.settings import TokenHubSettings
 
 
@@ -47,6 +50,10 @@ def test_codex_candidates_only_include_regular_session_jsonl(tmp_path: Path) -> 
     (root / "auth.json").write_text("secret")
     (root / "config.toml").write_text("secret")
     (sessions / "history.jsonl").write_text("history\n")
+    for excluded_name in ("auth.jsonl", "config.jsonl", "log.jsonl", "cache.jsonl"):
+        (sessions / excluded_name).write_text("private\n")
+        (nested / excluded_name).write_text("private\n")
+    (nested / "history.jsonl").write_text("history\n")
     (nested / "other.json").write_text("{}")
     (nested / "linked.jsonl").symlink_to(valid)
     (nested / "folder.jsonl").mkdir()
@@ -238,3 +245,69 @@ def test_discovery_service_keeps_private_descriptor_in_process(tmp_path: Path) -
             replace(service.candidate(source_id), evidence_codes=("refreshed_marker",))
         )
         assert repository._source(source_id).evidence_codes == "refreshed_marker"
+
+
+def test_failed_connector_batch_leaves_no_approvable_or_persisted_source(tmp_path: Path) -> None:
+    root = tmp_path / "codex"
+    sessions = root / "sessions"
+    sessions.mkdir(parents=True)
+    first_file = sessions / "first.jsonl"
+    second_file = sessions / "second.jsonl"
+    first_file.write_text("{}\n")
+    second_file.write_text("{}\n")
+
+    class TwoCandidates:
+        connector_id = "codex-local"
+        display_name = "OpenAI Codex"
+        provider = Provider.CODEX
+
+        def detect(self, _context: DiscoveryContext) -> DetectionResult:
+            return DetectionResult(
+                connector_id=self.connector_id,
+                display_name=self.display_name,
+                provider=self.provider,
+                state=SourceState.DISCOVERED,
+            )
+
+        def discover_sources(self, _context: DiscoveryContext) -> list[SourceDescriptor]:
+            return [
+                SourceDescriptor(
+                    source_id=source_id,
+                    connector_id=self.connector_id,
+                    provider=self.provider,
+                    display_name="Codex session",
+                    canonical_path=path,
+                    approved_root=sessions,
+                    source_type="jsonl",
+                    path_fingerprint=f"fingerprint-{source_id}",
+                )
+                for source_id, path in (("first", first_file), ("second", second_file))
+            ]
+
+    engine = create_engine_for(TokenHubSettings(data_directory=tmp_path / "data"))
+    initialize_database(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TRIGGER fail_second_source BEFORE INSERT ON sources "
+            "WHEN NEW.source_id = 'second' "
+            "BEGIN SELECT RAISE(FAIL, 'synthetic second-source failure'); END"
+        )
+
+    with Session(engine) as db_session:
+        repository = SourceRepository(db_session)
+        service = DiscoveryService(
+            ConnectorRegistry([TwoCandidates()]),
+            repository,
+            DiscoveryContext(home=tmp_path, environment={}, which=lambda _: None),
+        )
+
+        result = service.discover()[0]
+
+        assert result.state is SourceState.ERROR
+        assert result.sources == ()
+        for source_id in ("first", "second"):
+            with pytest.raises(KeyError):
+                service.candidate(source_id)
+            with pytest.raises(ValueError, match="source must be discovered"):
+                repository.approve(source_id)
+        assert db_session.scalars(select(SourceRecord)).all() == []
