@@ -1,0 +1,142 @@
+from pathlib import Path
+
+from tokenhub.connectors.codex.parser import parse_codex_jsonl
+from tokenhub.domain.models import (
+    MeasurementType,
+    Provider,
+    Quality,
+    SourceDescriptor,
+)
+
+FIXTURES = Path(__file__).parents[3] / "fixtures" / "codex"
+
+
+def synthetic_source(name: str) -> SourceDescriptor:
+    path = FIXTURES / name
+    return SourceDescriptor(
+        source_id="codex-local:fixture-fingerprint",
+        connector_id="codex-local",
+        provider=Provider.CODEX,
+        display_name="Codex session",
+        canonical_path=path,
+        approved_root=FIXTURES,
+        source_type="jsonl",
+        path_fingerprint="fixture-fingerprint",
+    )
+
+
+def test_parser_uses_delta_usage_and_excludes_cumulative_breakdowns() -> None:
+    """Fails if parser reads cumulative totals or counts cache/reasoning as workload."""
+    result = parse_codex_jsonl(synthetic_source("normal.jsonl"), start_offset=0)
+
+    assert len(result.events) == 1
+    event = result.events[0]
+    assert event.input_total_tokens == 100
+    assert event.cache_read_tokens == 70
+    assert event.cache_write_tokens == 10
+    assert event.output_total_tokens == 25
+    assert event.reasoning_tokens == 20
+    assert event.workload_tokens == 125
+    assert event.measurement_type is MeasurementType.DELTA
+
+
+def test_parser_stops_before_partial_final_line() -> None:
+    """Fails if an incomplete append advances the cursor beyond recoverable bytes."""
+    source = synthetic_source("partial.jsonl")
+
+    result = parse_codex_jsonl(source, start_offset=0)
+
+    assert [event.record_identity for event in result.events] == ["1"]
+    assert result.partial_final_record is True
+    assert result.safe_byte_offset < source.canonical_path.stat().st_size
+
+
+def test_parser_marks_unknown_shape_without_guessing_tokens() -> None:
+    """Fails if an unsupported usage structure becomes a zero-token event."""
+    result = parse_codex_jsonl(synthetic_source("unsupported.jsonl"), start_offset=0)
+
+    assert result.events == []
+    assert result.unsupported_records == 1
+
+
+def test_parser_keeps_duplicate_ordinals_for_persistence_deduplication() -> None:
+    """Fails if parsing drops records before the source-and-ordinal uniqueness boundary."""
+    result = parse_codex_jsonl(synthetic_source("duplicate.jsonl"), start_offset=0)
+
+    assert [event.record_identity for event in result.events] == ["1", "1"]
+    assert result.events[1].source_id == "codex-local:fixture-fingerprint"
+
+
+def test_parser_leaves_missing_breakdowns_unknown() -> None:
+    """Fails if missing optional usage values are fabricated as zero."""
+    result = parse_codex_jsonl(synthetic_source("duplicate.jsonl"), start_offset=0)
+
+    event = result.events[1]
+    assert event.cache_read_tokens is None
+    assert event.cache_write_tokens is None
+    assert event.reasoning_tokens is None
+    assert event.quality is Quality.EXACT
+    assert event.parser_version == "codex-jsonl-v1"
+
+
+def test_parser_starts_at_the_provided_completed_line_offset() -> None:
+    """Fails if an incremental scan rereads bytes before its cursor."""
+    source = synthetic_source("duplicate.jsonl")
+    first_line_size = source.canonical_path.read_bytes().index(b"\n") + 1
+
+    result = parse_codex_jsonl(source, start_offset=first_line_size)
+
+    assert [event.record_identity for event in result.events] == ["1"]
+    assert result.events[0].input_total_tokens == 10
+    assert result.safe_byte_offset == source.canonical_path.stat().st_size
+
+
+def test_parser_keeps_valid_records_when_later_token_value_is_invalid(tmp_path: Path) -> None:
+    """Fails if one malformed token value discards a prior valid completed record."""
+    path = tmp_path / "synthetic.jsonl"
+    path.write_bytes(
+        (FIXTURES / "normal.jsonl").read_bytes()
+        + b'{"ordinal":2,"timestamp":"2026-09-20T10:01:00Z",'
+        b'"type":"token_usage_record","payload":{"usage":{"input_tokens":-1}}}\n'
+    )
+    source = SourceDescriptor(
+        source_id="codex-local:synthetic-fingerprint",
+        connector_id="codex-local",
+        provider=Provider.CODEX,
+        display_name="Codex session",
+        canonical_path=path,
+        approved_root=tmp_path,
+        source_type="jsonl",
+        path_fingerprint="synthetic-fingerprint",
+    )
+
+    result = parse_codex_jsonl(source, start_offset=0)
+
+    assert [event.record_identity for event in result.events] == ["1"]
+    assert result.unsupported_records == 1
+    assert result.safe_byte_offset == path.stat().st_size
+
+
+def test_parser_rejects_explicit_null_token_values(tmp_path: Path) -> None:
+    """Fails if a malformed token field is mistaken for an absent optional field."""
+    path = tmp_path / "synthetic.jsonl"
+    path.write_bytes(
+        (FIXTURES / "normal.jsonl").read_bytes()
+        + b'{"ordinal":2,"timestamp":"2026-09-20T10:01:00Z",'
+        b'"type":"token_usage_record","payload":{"usage":{"input_tokens":null}}}\n'
+    )
+    source = SourceDescriptor(
+        source_id="codex-local:synthetic-fingerprint",
+        connector_id="codex-local",
+        provider=Provider.CODEX,
+        display_name="Codex session",
+        canonical_path=path,
+        approved_root=tmp_path,
+        source_type="jsonl",
+        path_fingerprint="synthetic-fingerprint",
+    )
+
+    result = parse_codex_jsonl(source, start_offset=0)
+
+    assert [event.record_identity for event in result.events] == ["1"]
+    assert result.unsupported_records == 1
