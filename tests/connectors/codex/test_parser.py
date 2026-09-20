@@ -29,6 +29,59 @@ def synthetic_source(name: str) -> SourceDescriptor:
     )
 
 
+@pytest.mark.parametrize("path_field", ["canonical_path", "approved_root"])
+@pytest.mark.parametrize("component", [".", "..", "relative"])
+def test_descriptor_rejects_raw_unsafe_paths_before_any_open(
+    path_field: str, component: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fails if raw spelling is normalized before the descriptor validates it."""
+    source_path = str(FIXTURES / "normal.jsonl")
+    root_path = str(FIXTURES)
+    if path_field == "canonical_path":
+        source_path = (
+            "normal.jsonl" if component == "relative" else f"{FIXTURES}/{component}/normal.jsonl"
+        )
+    else:
+        root_path = "fixtures/codex" if component == "relative" else f"{FIXTURES}/{component}"
+
+    def forbidden_open(*args: object, **kwargs: object) -> int:
+        pytest.fail("unsafe lexical paths must be rejected before any descriptor is opened")
+
+    monkeypatch.setattr(codex_parser.os, "open", forbidden_open)
+
+    with pytest.raises(ValueError, match="source paths must be absolute without dot components"):
+        SourceDescriptor(
+            source_id="codex-local:fixture-fingerprint",
+            connector_id="codex-local",
+            provider=Provider.CODEX,
+            display_name="Codex session",
+            canonical_path=source_path,
+            approved_root=root_path,
+            source_type="jsonl",
+            path_fingerprint="fixture-fingerprint",
+        )
+
+
+def test_parser_accepts_clean_raw_string_paths() -> None:
+    """Clean raw input keeps Path-valued fields and remains usable for scanning."""
+    source = SourceDescriptor(
+        source_id="codex-local:fixture-fingerprint",
+        connector_id="codex-local",
+        provider=Provider.CODEX,
+        display_name="Codex session",
+        canonical_path=str(FIXTURES / "normal.jsonl"),
+        approved_root=str(FIXTURES),
+        source_type="jsonl",
+        path_fingerprint="fixture-fingerprint",
+    )
+
+    result = parse_codex_jsonl(source, start_offset=0)
+
+    assert [event.record_identity for event in result.events] == ["1"]
+    assert isinstance(source.canonical_path, Path)
+    assert isinstance(source.approved_root, Path)
+
+
 def test_parser_uses_delta_usage_and_excludes_cumulative_breakdowns() -> None:
     """Fails if parser reads cumulative totals or counts cache/reasoning as workload."""
     result = parse_codex_jsonl(synthetic_source("normal.jsonl"), start_offset=0)

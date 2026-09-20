@@ -1,5 +1,6 @@
 """Provider-neutral models for normalized usage data."""
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -68,7 +69,12 @@ class UsageEvent:
 
 @dataclass(frozen=True, slots=True)
 class SourceDescriptor:
-    """A discovered source whose paths remain outside persistent storage until approval."""
+    """A discovered source whose paths remain outside persistent storage until approval.
+
+    Pass untrusted path spellings as strings so lexical validation precedes Path
+    normalization. Existing Path inputs carry only their already-normalized
+    spelling; a dot removed before this boundary cannot be recovered.
+    """
 
     source_id: str
     connector_id: str
@@ -82,6 +88,44 @@ class SourceDescriptor:
     evidence_codes: tuple[str, ...] = ()
     scan_supported: bool = False
     parser_version: str | None = None
+
+    def __init__(
+        self,
+        source_id: str,
+        connector_id: str,
+        provider: Provider,
+        display_name: str,
+        canonical_path: Path | str,
+        approved_root: Path | str,
+        source_type: str,
+        path_fingerprint: str,
+        state: SourceState = SourceState.DISCOVERED,
+        evidence_codes: tuple[str, ...] = (),
+        scan_supported: bool = False,
+        parser_version: str | None = None,
+    ) -> None:
+        # Check the original spelling before Path can discard literal dots.
+        for path in (canonical_path, approved_root):
+            spelling = os.fspath(path)
+            if os.altsep is not None:
+                spelling = spelling.replace(os.altsep, os.sep)
+            if any(part in {".", ".."} for part in spelling.split(os.sep)) or not Path(
+                spelling
+            ).is_absolute():
+                raise ValueError("source paths must be absolute without dot components")
+
+        object.__setattr__(self, "source_id", source_id)
+        object.__setattr__(self, "connector_id", connector_id)
+        object.__setattr__(self, "provider", provider)
+        object.__setattr__(self, "display_name", display_name)
+        object.__setattr__(self, "canonical_path", Path(canonical_path))
+        object.__setattr__(self, "approved_root", Path(approved_root))
+        object.__setattr__(self, "source_type", source_type)
+        object.__setattr__(self, "path_fingerprint", path_fingerprint)
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "evidence_codes", evidence_codes)
+        object.__setattr__(self, "scan_supported", scan_supported)
+        object.__setattr__(self, "parser_version", parser_version)
 
     def safe_view(self) -> dict[str, str | bool | tuple[str, ...] | None]:
         """Project only public discovery metadata, never filesystem paths."""
