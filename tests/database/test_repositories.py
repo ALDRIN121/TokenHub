@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -119,6 +122,19 @@ def test_duplicate_event_and_cursor_are_atomic(session: Session) -> None:
     assert repo.dashboard_totals().workload_tokens == 125
 
 
+def test_persist_scan_after_read_helpers_uses_a_new_atomic_transaction(session: Session) -> None:
+    """Fails if read helpers leave an implicit transaction open for the next scan."""
+    repo = UsageRepository(session)
+    repo.persist_scan([synthetic_event(record_identity="1")], cursor_for(12))
+
+    assert repo.current_cursor("source-a") == cursor_for(12)
+    assert repo.dashboard_totals().workload_tokens == 125
+    outcome = repo.persist_scan([synthetic_event(record_identity="2")], cursor_for(24))
+
+    assert outcome.inserted_events == 1
+    assert repo.current_cursor("source-a") == cursor_for(24)
+
+
 def test_engine_rejects_database_outside_tokenhub_data_directory(tmp_path: Path) -> None:
     """Fails if a caller could point TokenHub's engine at a provider database."""
     settings = TokenHubSettings(data_directory=tmp_path / "tokenhub-data")
@@ -126,3 +142,34 @@ def test_engine_rejects_database_outside_tokenhub_data_directory(tmp_path: Path)
 
     assert engine.url.database == str(settings.data_directory / "tokenhub.sqlite3")
     engine.dispose()
+
+
+def test_alembic_rejects_an_arbitrary_database_url(tmp_path: Path) -> None:
+    """Fails if migrations can be directed to a provider or arbitrary SQLite database."""
+    foreign_database = tmp_path / "provider.sqlite3"
+    environment = {
+        **os.environ,
+        "TOKENHUB_DATA_DIRECTORY": str(tmp_path / "tokenhub-data"),
+        "TOKENHUB_DATABASE_URL": f"sqlite:///{foreign_database}",
+    }
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alembic",
+            "-c",
+            "backend/alembic.ini",
+            "upgrade",
+            "head",
+        ],
+        cwd=Path(__file__).parents[2],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "TOKENHUB_DATABASE_URL is not supported" in result.stderr
+    assert not foreign_database.exists()

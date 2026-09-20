@@ -2,18 +2,27 @@
 
 import os
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 from tokenhub.database.models import Base
+from tokenhub.settings import TokenHubSettings
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-configured_url = os.environ.get("TOKENHUB_DATABASE_URL")
-if configured_url is not None:
-    config.set_main_option("sqlalchemy.url", configured_url)
+if os.environ.get("TOKENHUB_DATABASE_URL") is not None:
+    raise RuntimeError("TOKENHUB_DATABASE_URL is not supported; configure TOKENHUB_DATA_DIRECTORY instead")
+
+configured_data_directory = os.environ.get("TOKENHUB_DATA_DIRECTORY")
+settings = TokenHubSettings(
+    data_directory=None if configured_data_directory is None else Path(configured_data_directory).resolve()
+)
+database_path = settings.data_directory / "tokenhub.sqlite3"
+database_path.parent.mkdir(parents=True, exist_ok=True)
+config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
 
 target_metadata = Base.metadata
 

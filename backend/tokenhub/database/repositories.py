@@ -151,18 +151,24 @@ class UsageRepository:
         )
 
     def current_cursor(self, source_id: str) -> SyncCursor | None:
-        cursor = self.session.get(SyncCursorRecord, source_id)
-        if cursor is None:
-            return None
-        return SyncCursor(
-            source_id=cursor.source_id,
-            byte_offset=cursor.byte_offset,
-            source_mtime_ns=cursor.source_mtime_ns,
-            parser_version=cursor.parser_version,
-        )
+        with self.session.begin():
+            cursor = self.session.get(SyncCursorRecord, source_id)
+            if cursor is None:
+                return None
+            return SyncCursor(
+                source_id=cursor.source_id,
+                byte_offset=cursor.byte_offset,
+                source_mtime_ns=cursor.source_mtime_ns,
+                parser_version=cursor.parser_version,
+            )
 
     def dashboard_totals(self) -> DashboardTotals:
-        workload = self.session.scalar(
-            select(func.coalesce(func.sum(UsageEventRecord.input_total_tokens + UsageEventRecord.output_total_tokens), 0))
-        )
-        return DashboardTotals(workload_tokens=int(workload or 0))
+        with self.session.begin():
+            workload = self.session.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(UsageEventRecord.input_total_tokens + UsageEventRecord.output_total_tokens), 0
+                    )
+                )
+            )
+            return DashboardTotals(workload_tokens=int(workload or 0))
