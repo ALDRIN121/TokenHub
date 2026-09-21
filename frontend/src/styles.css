@@ -1,0 +1,234 @@
+:root {
+  color-scheme: light dark;
+  --surface: #ffffff;
+  --surface-muted: #f4f5f7;
+  --border: #d7dae0;
+  --text: #14161a;
+  --text-muted: #5a6069;
+  --accent: #1f6feb;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #1b1d21;
+    --surface-muted: #101215;
+    --border: #33373d;
+    --text: #f2f3f5;
+    --text-muted: #a2a8b0;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+}
+
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem 4rem;
+}
+
+.app__header h1 {
+  margin: 0;
+  font-size: 1.9rem;
+  letter-spacing: -0.01em;
+}
+
+.app__tagline {
+  margin: 0.25rem 0 0;
+  color: var(--text-muted);
+  font-size: 1rem;
+}
+
+.app__privacy {
+  margin: 0.75rem 0 0;
+  max-width: 60ch;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.app__error,
+.app__status,
+.app__loading {
+  margin: 1.25rem 0 0;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 0.9rem;
+}
+
+.app__error {
+  border-color: #b3261e;
+  color: #b3261e;
+}
+
+.panel {
+  margin-top: 2.25rem;
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.panel__intro,
+.panel__footnote {
+  margin: 0.5rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  max-width: 70ch;
+}
+
+.provider-grid {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.provider-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 1rem;
+}
+
+.provider-card h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.provider-card__evidence,
+.provider-card__source,
+.provider-card__note {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.provider-card__sources {
+  margin: 0.75rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+}
+
+.provider-card__sources li + li {
+  margin-top: 0.5rem;
+}
+
+.provider-card__sources button {
+  margin-top: 0.4rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.provider-card__sources button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.provider-card__sources button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.metric-grid {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1rem 0 0;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.metric-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 0.75rem 0.9rem;
+}
+
+.metric-card__label {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.metric-card__value {
+  margin: 0.35rem 0 0;
+  font-size: 1.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.source-status {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+}
+
+.source-status__item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: baseline;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 0.65rem 0.85rem;
+  font-size: 0.85rem;
+}
+
+.source-status__item + .source-status__item {
+  margin-top: 0.5rem;
+}
+
+.source-status__name {
+  font-weight: 600;
+}
+
+.source-status__state {
+  font-variant: small-caps;
+  color: var(--accent);
+}
+
+.source-status__detail {
+  color: var(--text-muted);
+}
+
+.source-status__explainer {
+  margin: 1rem 0 0;
+  max-width: 70ch;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.panel > button {
+  margin-top: 1rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.panel > button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
