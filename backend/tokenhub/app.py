@@ -21,6 +21,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import RequestResponseEndpoint
 
 from tokenhub.api.container import Container
 from tokenhub.api.routes import router
@@ -50,7 +51,9 @@ def create_app(settings: TokenHubSettings | None = None) -> FastAPI:
     app.state.container = container
 
     @app.middleware("http")
-    async def local_request_guard(request: Request, call_next) -> Response:  # type: ignore[no-untyped-def]
+    async def local_request_guard(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         port = container.settings.port
         hosts = request.headers.getlist("host")
         if len(hosts) != 1 or not is_loopback_host(hosts[0], port):

@@ -56,6 +56,7 @@ class Container:
 
     @property
     def services(self) -> Services:
+        """Collaborators for the running app; raises before :meth:`start`."""
         if self._services is None:
             raise RuntimeError("container has not started")
         return self._services
@@ -73,6 +74,7 @@ class Container:
 
     @discovery_context.setter
     def discovery_context(self, context: DiscoveryContext) -> None:
+        """Replace discovery inputs, including after startup."""
         self._discovery_context = context
         if self._services is not None:
             self._services.discovery.context = context

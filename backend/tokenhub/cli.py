@@ -24,7 +24,11 @@ def loopback_url(settings: TokenHubSettings) -> str:
 
 
 def main() -> None:
+    """Serve the API and the built UI on the loopback interface."""
     settings = TokenHubSettings()
+    print(
+        f"Starting TokenHub on {loopback_url(settings)} (loopback only, Ctrl+C to stop)"
+    )
     uvicorn.run(
         create_app(settings),
         host=settings.host,

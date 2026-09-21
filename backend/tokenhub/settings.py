@@ -30,6 +30,7 @@ class TokenHubSettings:
         host: str = DEFAULT_HOST,
         port: int = DEFAULT_PORT,
     ) -> None:
+        """Bind loopback only and resolve TokenHub-controlled paths."""
         if host not in _LOOPBACK_BIND_HOSTS:
             raise ValueError("TokenHub binds to loopback hosts only")
         if not _MIN_PORT <= port <= _MAX_PORT:

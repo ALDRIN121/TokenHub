@@ -15,7 +15,11 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
-from tokenhub.api.container import Container, Services
+from tokenhub.api.container import Container
+
+# The service layer's own return type for an approval. The HTTP layer only
+# reads it — it never queries the ORM itself — so this is a data dependency on
+# the service contract, not a persistence leak into transport code.
 from tokenhub.database.models import SourceRecord
 from tokenhub.domain.models import (
     DashboardSummary,
@@ -27,6 +31,7 @@ from tokenhub.ingestion.service import (
     SourceNotFoundError,
     UnsupportedSourceError,
 )
+from tokenhub.security.redaction import redact_sensitive
 
 logger = logging.getLogger(__name__)
 
@@ -46,16 +51,18 @@ def container_for(request: Request) -> Container:
     return request.app.state.container
 
 
-def services_for(request: Request) -> Services:
-    return container_for(request).services
-
-
 def _service_failure(error: Exception) -> HTTPException:
-    """Map a service exception to a status code and a path-free message."""
+    """Map a service exception to a status code and a path-free message.
+
+    Known service failures get a fixed, path-free detail. Anything else becomes
+    a generic internal error: a route must never hand a provider path, a raw
+    record, or a credential to the client, and the log line goes through the
+    central redactor.
+    """
     for error_type, status, detail in _ERROR_MAP:
         if isinstance(error, error_type):
-            return HTTPException(status_code=status, detail=detail)
-    logger.exception("unhandled TokenHub service failure")
+            return HTTPException(status_code=status, detail=redact_sensitive(detail))
+    logger.error("unhandled TokenHub service failure: %s", redact_sensitive(str(error)))
     return HTTPException(status_code=500, detail="Internal error")
 
 
@@ -145,7 +152,7 @@ def approve_source(source_id: str, request: Request) -> dict[str, object]:
     with container.lock:
         try:
             source = container.services.ingestion.approve(source_id)
-        except (SourceNotFoundError, SourceNotApprovedError, UnsupportedSourceError, ValueError, OSError) as error:
+        except Exception as error:  # mapped to a safe status below
             raise _service_failure(error) from error
     return _approval_payload(source)
 
@@ -157,7 +164,7 @@ def rescan_source(source_id: str, request: Request) -> dict[str, object]:
     with container.lock:
         try:
             outcome = container.services.ingestion.rescan(source_id)
-        except (SourceNotFoundError, SourceNotApprovedError, UnsupportedSourceError, ValueError, OSError) as error:
+        except Exception as error:  # mapped to a safe status below
             raise _service_failure(error) from error
     return _import_payload(outcome)
 
@@ -167,7 +174,10 @@ def rebuild(request: Request) -> dict[str, object]:
     """Re-derive normalized usage for every approved source."""
     container = container_for(request)
     with container.lock:
-        outcome: RebuildOutcome = container.services.ingestion.rebuild()
+        try:
+            outcome: RebuildOutcome = container.services.ingestion.rebuild()
+        except Exception as error:  # mapped to a safe status below
+            raise _service_failure(error) from error
     return {
         "inserted_events": outcome.inserted_events,
         "failed_source_ids": list(outcome.failed_source_ids),
