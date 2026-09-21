@@ -86,8 +86,19 @@ class SourceRepository:
         candidate = self._pending_candidates.get(source_id)
         if candidate is None:
             raise ValueError("source must be discovered in this approval session")
+        if (
+            candidate.approved_root_device is None
+            or candidate.approved_root_inode is None
+        ):
+            raise ValueError("discovered source has no approved root identity")
+        expected_root_identity = (
+            candidate.approved_root_device,
+            candidate.approved_root_inode,
+        )
         approved_path = validate_source_path(
-            candidate.canonical_path, candidate.approved_root
+            candidate.canonical_path,
+            candidate.approved_root,
+            expected_root_identity,
         )
         with self.session.begin():
             source = self.session.get(SourceRecord, source_id)
@@ -96,7 +107,9 @@ class SourceRepository:
             if source.state != SourceState.DISCOVERED.value:
                 raise ValueError("only discovered sources may be approved")
             source.canonical_path = str(approved_path)
-            source.approved_root = str(candidate.approved_root.resolve(strict=True))
+            source.approved_root = str(candidate.approved_root)
+            source.approved_root_device = candidate.approved_root_device
+            source.approved_root_inode = candidate.approved_root_inode
             source.state = SourceState.APPROVED.value
             self.session.flush()
             self.session.expunge(source)
@@ -190,6 +203,7 @@ class UsageRepository:
                     source_mtime_ns=cursor.source_mtime_ns,
                     parser_version=cursor.parser_version,
                     prefix_fingerprint=cursor.prefix_fingerprint,
+                    source_unsupported_records=cursor.source_unsupported_records,
                 )
                 .on_conflict_do_update(
                     index_elements=["source_id"],
@@ -198,6 +212,7 @@ class UsageRepository:
                         "source_mtime_ns": cursor.source_mtime_ns,
                         "parser_version": cursor.parser_version,
                         "prefix_fingerprint": cursor.prefix_fingerprint,
+                        "source_unsupported_records": cursor.source_unsupported_records,
                     },
                 )
             )
@@ -237,6 +252,7 @@ class UsageRepository:
                 source_mtime_ns=cursor.source_mtime_ns,
                 parser_version=cursor.parser_version,
                 prefix_fingerprint=cursor.prefix_fingerprint,
+                source_unsupported_records=cursor.source_unsupported_records,
             )
 
     def clear_normalized(self) -> None:
@@ -288,14 +304,16 @@ class UsageRepository:
                         else None
                     ),
                     source_mtime_ns=mtime,
+                    unsupported_records=unsupported_records,
                 )
-                for source_id, state, parser_version, latest_event_at, mtime in self.session.execute(
+                for source_id, state, parser_version, latest_event_at, mtime, unsupported_records in self.session.execute(
                     select(
                         SourceRecord.source_id,
                         SourceRecord.state,
                         SourceRecord.parser_version,
                         latest_events.c.latest_event_at,
                         SyncCursorRecord.source_mtime_ns,
+                        SyncCursorRecord.source_unsupported_records,
                     )
                     .outerjoin(
                         latest_events,

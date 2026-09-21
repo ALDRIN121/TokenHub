@@ -19,6 +19,7 @@ from tokenhub.domain.models import (
     SyncCursor,
     UsageEvent,
 )
+from tokenhub.security.paths import directory_identity
 from tokenhub.settings import TokenHubSettings
 
 
@@ -90,6 +91,7 @@ def test_approval_persists_path_only_after_discovery(session: Session, tmp_path:
     session_file = approved_root / "sessions" / "a.jsonl"
     session_file.parent.mkdir(parents=True)
     session_file.write_text("{}\n")
+    root_device, root_inode = directory_identity(approved_root)
     candidate = SourceDescriptor(
         source_id="source-a",
         connector_id="codex-local",
@@ -99,6 +101,8 @@ def test_approval_persists_path_only_after_discovery(session: Session, tmp_path:
         approved_root=approved_root,
         source_type="jsonl",
         path_fingerprint="fingerprint-a",
+        approved_root_device=root_device,
+        approved_root_inode=root_inode,
     )
     repository = SourceRepository(session)
     repository.upsert_discovery(candidate)

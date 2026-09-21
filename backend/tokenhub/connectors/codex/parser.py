@@ -3,10 +3,8 @@
 import hashlib
 import json
 import os
-import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from tokenhub.domain.models import (
@@ -15,13 +13,9 @@ from tokenhub.domain.models import (
     SourceDescriptor,
     UsageEvent,
 )
+from tokenhub.security.paths import open_source_path
 
 _MISSING = object()
-_SECURE_DIR_FD_TRAVERSAL = (
-    os.open in os.supports_dir_fd
-    and bool(getattr(os, "O_DIRECTORY", 0))
-    and bool(getattr(os, "O_NOFOLLOW", 0))
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +28,7 @@ class ParsedCodexScan:
     unsupported_records: int
     source_mtime_ns: int
     safe_prefix_fingerprint: str
+    full_reparse: bool
 
 
 def parse_codex_jsonl(
@@ -48,6 +43,7 @@ def parse_codex_jsonl(
     safe_byte_offset = start_offset
     unsupported_records = 0
     partial_final_record = False
+    full_reparse = start_offset == 0
 
     with os.fdopen(_open_approved_source(source), "rb") as session_file:
         source_stat = os.fstat(session_file.fileno())
@@ -55,6 +51,7 @@ def parse_codex_jsonl(
         if start_offset > source_stat.st_size:
             start_offset = 0
             safe_byte_offset = 0
+            full_reparse = True
         elif start_offset > 0:
             remaining = start_offset
             while remaining:
@@ -70,6 +67,7 @@ def parse_codex_jsonl(
                 start_offset = 0
                 safe_byte_offset = 0
                 prefix_hasher = hashlib.sha256()
+                full_reparse = True
         session_file.seek(start_offset)
         while raw_line := session_file.readline():
             if not raw_line.endswith(b"\n"):
@@ -91,6 +89,7 @@ def parse_codex_jsonl(
         unsupported_records=unsupported_records,
         source_mtime_ns=source_stat.st_mtime_ns,
         safe_prefix_fingerprint=prefix_hasher.hexdigest(),
+        full_reparse=full_reparse,
     )
 
 
@@ -174,87 +173,17 @@ def _optional_token(usage: dict[str, Any], field: str) -> int | None:
 
 def _open_approved_source(source: SourceDescriptor) -> int:
     """Open an approved regular file by descending from its root descriptor."""
-    _require_secure_directory_traversal()
-    relative_path = _lexical_relative_path(source)
     try:
-        root_descriptor = _open_approved_root(source.approved_root)
+        expected_identity = (
+            (source.approved_root_device, source.approved_root_inode)
+            if source.approved_root_device is not None
+            and source.approved_root_inode is not None
+            else None
+        )
+        return open_source_path(
+            source.canonical_path,
+            source.approved_root,
+            expected_identity,
+        )
     except (OSError, ValueError) as error:
         raise ValueError("approved source cannot be opened safely") from error
-
-    try:
-        directory_descriptors = [root_descriptor]
-        for component in relative_path.parts[:-1]:
-            directory_descriptors.append(
-                _open_directory(component, directory_descriptors[-1])
-            )
-        return _open_regular_file(relative_path.name, directory_descriptors[-1])
-    except (OSError, ValueError) as error:
-        raise ValueError("approved source cannot be opened safely") from error
-    finally:
-        for descriptor in reversed(directory_descriptors):
-            os.close(descriptor)
-
-
-def _lexical_relative_path(source: SourceDescriptor) -> Path:
-    """Return a source path relative to its root without resolving any symlinks."""
-    if not _is_absolute_clean_path(source.approved_root) or not _is_absolute_clean_path(
-        source.canonical_path
-    ):
-        raise ValueError("approved source cannot be opened safely")
-    try:
-        relative_path = source.canonical_path.relative_to(source.approved_root)
-    except ValueError as error:
-        raise ValueError("approved source cannot be opened safely") from error
-    if not relative_path.parts:
-        raise ValueError("approved source cannot be opened safely")
-    return relative_path
-
-
-def _require_secure_directory_traversal() -> None:
-    """Reject platforms that cannot safely constrain descriptor-relative traversal."""
-    if not _SECURE_DIR_FD_TRAVERSAL:
-        raise ValueError("approved source cannot be opened safely")
-
-
-def _open_approved_root(root: Path) -> int:
-    """Open an absolute root from ``/`` without following any path component."""
-    descriptor = _open_directory(Path("/"))
-    try:
-        for component in root.parts[1:]:
-            child_descriptor = _open_directory(component, descriptor)
-            os.close(descriptor)
-            descriptor = child_descriptor
-        return descriptor
-    except (OSError, ValueError):
-        os.close(descriptor)
-        raise
-
-
-def _is_absolute_clean_path(path: Path) -> bool:
-    return path.is_absolute() and all(part not in {".", ".."} for part in path.parts)
-
-
-def _open_directory(path: Path | str, parent_descriptor: int | None = None) -> int:
-    """Open one non-symlink directory and verify its descriptor type."""
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    descriptor = os.open(path, flags, dir_fd=parent_descriptor)
-    try:
-        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
-            raise ValueError("source is not a directory")
-    except (OSError, ValueError):
-        os.close(descriptor)
-        raise
-    return descriptor
-
-
-def _open_regular_file(name: str, parent_descriptor: int) -> int:
-    """Open one nonblocking, non-symlink file and verify its descriptor type."""
-    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
-    descriptor = os.open(name, flags, dir_fd=parent_descriptor)
-    try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise ValueError("source is not a regular file")
-    except (OSError, ValueError):
-        os.close(descriptor)
-        raise
-    return descriptor

@@ -25,6 +25,8 @@ class SourceRecord(Base):
     parser_version: Mapped[str | None] = mapped_column(String)
     canonical_path: Mapped[str | None] = mapped_column(String)
     approved_root: Mapped[str | None] = mapped_column(String)
+    approved_root_device: Mapped[int | None] = mapped_column(Integer)
+    approved_root_inode: Mapped[int | None] = mapped_column(Integer)
 
 
 class UsageEventRecord(Base):
@@ -55,6 +57,9 @@ class SyncCursorRecord(Base):
     source_mtime_ns: Mapped[int | None] = mapped_column(Integer)
     parser_version: Mapped[str] = mapped_column(String, nullable=False)
     prefix_fingerprint: Mapped[str | None] = mapped_column(String)
+    source_unsupported_records: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
 
 
 class ImportRunRecord(Base):

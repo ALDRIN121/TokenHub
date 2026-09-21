@@ -88,6 +88,8 @@ class SourceDescriptor:
     evidence_codes: tuple[str, ...] = ()
     scan_supported: bool = False
     parser_version: str | None = None
+    approved_root_device: int | None = None
+    approved_root_inode: int | None = None
 
     def __init__(
         self,
@@ -103,6 +105,8 @@ class SourceDescriptor:
         evidence_codes: tuple[str, ...] = (),
         scan_supported: bool = False,
         parser_version: str | None = None,
+        approved_root_device: int | None = None,
+        approved_root_inode: int | None = None,
     ) -> None:
         # Check the original spelling before Path can discard literal dots.
         for path in (canonical_path, approved_root):
@@ -127,6 +131,8 @@ class SourceDescriptor:
         object.__setattr__(self, "evidence_codes", evidence_codes)
         object.__setattr__(self, "scan_supported", scan_supported)
         object.__setattr__(self, "parser_version", parser_version)
+        object.__setattr__(self, "approved_root_device", approved_root_device)
+        object.__setattr__(self, "approved_root_inode", approved_root_inode)
 
     def safe_view(self) -> dict[str, str | bool | tuple[str, ...] | None]:
         """Project only public discovery metadata, never filesystem paths."""
@@ -153,6 +159,7 @@ class SyncCursor:
     source_mtime_ns: int | None
     parser_version: str
     prefix_fingerprint: str | None = None
+    source_unsupported_records: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +195,7 @@ class SourceFreshness:
     parser_version: str | None
     latest_event_at: datetime | None
     source_mtime_ns: int | None
+    unsupported_records: int | None
 
 
 @dataclass(frozen=True, slots=True)

@@ -19,6 +19,7 @@ from tokenhub.domain.models import (
     SourceState,
     SyncCursor,
 )
+from tokenhub.security.paths import directory_identity
 
 
 class CodexConnector:
@@ -53,6 +54,7 @@ class CodexConnector:
         if root.is_symlink() or not sessions.is_dir() or sessions.is_symlink():
             return []
         approved_root = sessions.resolve(strict=True)
+        approved_root_device, approved_root_inode = directory_identity(approved_root)
         candidates: list[SourceDescriptor] = []
         for directory, dirnames, filenames in os.walk(sessions, followlinks=False):
             dirnames[:] = sorted(
@@ -93,6 +95,8 @@ class CodexConnector:
                         evidence_codes=("session_source_found",),
                         scan_supported=True,
                         parser_version="codex-jsonl-v1",
+                        approved_root_device=approved_root_device,
+                        approved_root_inode=approved_root_inode,
                     )
                 )
         return candidates
@@ -105,6 +109,8 @@ class CodexConnector:
             or not source.scan_supported
             or source.source_type != capabilities.source_type
             or source.parser_version != capabilities.parser_version
+            or source.approved_root_device is None
+            or source.approved_root_inode is None
         ):
             return ScanResult(
                 state=SourceState.UNSUPPORTED, reason_code="unsupported_source"
@@ -134,10 +140,17 @@ class CodexConnector:
                 else None
             ),
         )
+        source_unsupported_records = parsed.unsupported_records
+        if (
+            not parsed.full_reparse
+            and cursor is not None
+            and cursor.parser_version == capabilities.parser_version
+        ):
+            source_unsupported_records += cursor.source_unsupported_records
         return ScanResult(
             state=(
                 SourceState.PARTIAL
-                if parsed.partial_final_record or parsed.unsupported_records
+                if parsed.partial_final_record or source_unsupported_records
                 else SourceState.HEALTHY
             ),
             events=tuple(parsed.events),
@@ -147,6 +160,7 @@ class CodexConnector:
                 source_mtime_ns=parsed.source_mtime_ns,
                 parser_version=capabilities.parser_version or "codex-jsonl-v1",
                 prefix_fingerprint=parsed.safe_prefix_fingerprint,
+                source_unsupported_records=source_unsupported_records,
             ),
             partial_final_record=parsed.partial_final_record,
             unsupported_records=parsed.unsupported_records,

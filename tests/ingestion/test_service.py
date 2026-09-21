@@ -15,7 +15,7 @@ from tokenhub.database.models import (
     SyncCursorRecord,
     UsageEventRecord,
 )
-from tokenhub.domain.models import Provider, SourceState
+from tokenhub.domain.models import Provider, Quality, SourceState
 from tokenhub.ingestion.service import (
     SourceNotApprovedError,
     SourceNotFoundError,
@@ -92,6 +92,71 @@ def test_approval_revalidates_containment_before_persisting_path(
     assert source.state == SourceState.DISCOVERED
 
 
+def test_approval_rejects_discovered_root_replaced_by_outside_symlink(
+    app_services: Services,
+    tmp_path: Path,
+) -> None:
+    source_id = discover_codex(app_services)
+    discovered_root = app_services.session_file.parent
+    discovered_root.rename(discovered_root.with_name("sessions-original"))
+    outside_root = tmp_path / "outside-sessions"
+    outside_root.mkdir()
+    (outside_root / app_services.session_file.name).write_bytes(
+        token_record(99, input_tokens=999)
+    )
+    discovered_root.symlink_to(outside_root, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="approved root"):
+        app_services.ingestion.approve(source_id)
+
+    source = app_services.source_repository.get(source_id)
+    assert source.canonical_path is None
+    assert source.approved_root is None
+    assert source.state == SourceState.DISCOVERED
+
+
+def test_approval_rejects_discovered_ancestor_replaced_by_outside_symlink(
+    app_services: Services,
+    tmp_path: Path,
+) -> None:
+    source_id = discover_codex(app_services)
+    codex_home = app_services.session_file.parent.parent
+    codex_home.rename(codex_home.with_name(".codex-original"))
+    outside_home = tmp_path / "outside-codex"
+    outside_sessions = outside_home / "sessions"
+    outside_sessions.mkdir(parents=True)
+    (outside_sessions / app_services.session_file.name).write_bytes(
+        token_record(99, input_tokens=999)
+    )
+    codex_home.symlink_to(outside_home, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="approved root"):
+        app_services.ingestion.approve(source_id)
+
+    source = app_services.source_repository.get(source_id)
+    assert source.canonical_path is None
+    assert source.approved_root is None
+    assert source.state == SourceState.DISCOVERED
+
+
+def test_approval_rejects_discovered_root_replaced_by_new_directory(
+    app_services: Services,
+) -> None:
+    source_id = discover_codex(app_services)
+    discovered_root = app_services.session_file.parent
+    discovered_root.rename(discovered_root.with_name("sessions-original"))
+    discovered_root.mkdir()
+    app_services.session_file.write_bytes(token_record(99, input_tokens=999))
+
+    with pytest.raises(ValueError, match="approved root"):
+        app_services.ingestion.approve(source_id)
+
+    source = app_services.source_repository.get(source_id)
+    assert source.canonical_path is None
+    assert source.approved_root is None
+    assert source.state == SourceState.DISCOVERED
+
+
 def test_idempotent_and_incremental_import(app_services: Services) -> None:
     source_id = discover_and_approve_codex(app_services)
     first = app_services.ingestion.rescan(source_id)
@@ -132,6 +197,8 @@ def test_partial_commits_valid_events_and_safe_cursor_then_retries(
     complete = app_services.ingestion.rescan(source_id)
     assert complete.inserted_events == 1
     assert complete.partial_final_record is False
+    assert complete.cursor.source_unsupported_records == 0
+    assert app_services.source_repository.get(source_id).state == SourceState.HEALTHY
     assert app_services.analytics.dashboard().workload_tokens == 140
     with app_services.session.begin():
         runs = list(
@@ -158,6 +225,93 @@ def test_malformed_completed_records_preserve_events_and_issue_count(
             app_services.session.scalar(select(ImportRunRecord.unsupported_records))
             == 1
         )
+
+
+def test_malformed_quality_survives_unchanged_rescan(app_services: Services) -> None:
+    source_id = discover_and_approve_codex(app_services)
+    with app_services.session_file.open("ab") as stream:
+        stream.write(b'{"unknown":"synthetic"}\n')
+    first = app_services.ingestion.rescan(source_id)
+
+    second = app_services.ingestion.rescan(source_id)
+
+    assert first.unsupported_records == 1
+    assert second.unsupported_records == 0
+    assert second.cursor.source_unsupported_records == 1
+    assert app_services.source_repository.get(source_id).state == SourceState.PARTIAL
+    freshness = next(
+        item
+        for item in app_services.analytics.dashboard().source_freshness
+        if item.source_id == source_id
+    )
+    assert freshness.state == SourceState.PARTIAL
+    assert freshness.unsupported_records == 1
+    assert app_services.analytics.dashboard().quality_counts[Quality.EXACT] == 1
+
+
+def test_malformed_quality_survives_valid_append(app_services: Services) -> None:
+    source_id = discover_and_approve_codex(app_services)
+    with app_services.session_file.open("ab") as stream:
+        stream.write(b'{"unknown":"synthetic"}\n')
+    app_services.ingestion.rescan(source_id)
+    with app_services.session_file.open("ab") as stream:
+        stream.write(token_record(2, input_tokens=10, output_tokens=5))
+
+    appended = app_services.ingestion.rescan(source_id)
+
+    assert appended.inserted_events == 1
+    assert appended.unsupported_records == 0
+    assert appended.cursor.source_unsupported_records == 1
+    assert app_services.source_repository.get(source_id).state == SourceState.PARTIAL
+
+
+def test_malformed_quality_survives_process_restart(
+    app_services: Services,
+    tmp_path: Path,
+) -> None:
+    source_id = discover_and_approve_codex(app_services)
+    with app_services.session_file.open("ab") as stream:
+        stream.write(b'{"unknown":"synthetic"}\n')
+    app_services.ingestion.rescan(source_id)
+    restarted = services_for(
+        app_services.session, tmp_path / "empty-home", app_services.session_file
+    )
+
+    rescanned = restarted.ingestion.rescan(source_id)
+
+    assert rescanned.unsupported_records == 0
+    assert rescanned.cursor.source_unsupported_records == 1
+    assert restarted.source_repository.get(source_id).state == SourceState.PARTIAL
+
+
+def test_malformed_quality_survives_rebuild(app_services: Services) -> None:
+    source_id = discover_and_approve_codex(app_services)
+    with app_services.session_file.open("ab") as stream:
+        stream.write(b'{"unknown":"synthetic"}\n')
+    app_services.ingestion.rescan(source_id)
+
+    rebuilt = app_services.ingestion.rebuild()
+
+    assert rebuilt.imports[0].unsupported_records == 1
+    assert rebuilt.imports[0].cursor.source_unsupported_records == 1
+    assert app_services.source_repository.get(source_id).state == SourceState.PARTIAL
+
+
+def test_changed_source_full_reparse_clears_malformed_quality(
+    app_services: Services,
+) -> None:
+    source_id = discover_and_approve_codex(app_services)
+    with app_services.session_file.open("ab") as stream:
+        stream.write(b'{"unknown":"synthetic"}\n')
+    app_services.ingestion.rescan(source_id)
+    replacement = token_record(2, input_tokens=10, output_tokens=5)
+    app_services.session_file.write_bytes(replacement)
+
+    replaced = app_services.ingestion.rescan(source_id)
+
+    assert replaced.cursor.byte_offset == len(replacement)
+    assert replaced.cursor.source_unsupported_records == 0
+    assert app_services.source_repository.get(source_id).state == SourceState.HEALTHY
 
 
 def test_scan_failure_cannot_commit_events_cursor_or_audit(
@@ -279,6 +433,22 @@ def test_rescan_after_approval_rejects_replacement_symlink(
     assert app_services.usage_repository.current_cursor(source_id) is None
 
 
+def test_rescan_rejects_approved_root_replaced_by_new_directory(
+    app_services: Services,
+) -> None:
+    source_id = discover_and_approve_codex(app_services)
+    approved_root = app_services.session_file.parent
+    approved_root.rename(approved_root.with_name("sessions-original"))
+    approved_root.mkdir()
+    app_services.session_file.write_bytes(token_record(99, input_tokens=999))
+
+    with pytest.raises(ValueError, match="safely"):
+        app_services.ingestion.rescan(source_id)
+
+    assert app_services.analytics.dashboard().event_count == 0
+    assert app_services.usage_repository.current_cursor(source_id) is None
+
+
 def test_persisted_raw_dot_path_rejected_before_any_open(
     app_services: Services,
     monkeypatch: pytest.MonkeyPatch,
@@ -383,16 +553,23 @@ def test_cursor_fingerprint_migration_preserves_legacy_rows(tmp_path: Path) -> N
     )
     assert upgraded.returncode == 0, upgraded.stderr
     with sqlite3.connect(database) as connection:
-        columns = {
+        cursor_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(sync_cursors)")
         }
+        source_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(sources)")
+        }
         row = connection.execute(
-            "SELECT byte_offset, prefix_fingerprint FROM sync_cursors "
+            "SELECT byte_offset, prefix_fingerprint, source_unsupported_records "
+            "FROM sync_cursors "
             "WHERE source_id = ?",
             ("legacy-source",),
         ).fetchone()
-    assert "prefix_fingerprint" in columns
-    assert row == (42, None)
+    assert "prefix_fingerprint" in cursor_columns
+    assert "source_unsupported_records" in cursor_columns
+    assert "approved_root_device" in source_columns
+    assert "approved_root_inode" in source_columns
+    assert row == (42, None, 0)
 
 
 def test_disabled_source_cannot_be_read_or_rebuilt(

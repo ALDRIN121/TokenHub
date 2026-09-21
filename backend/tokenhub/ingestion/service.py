@@ -67,6 +67,8 @@ class IngestionService:
                 state=SourceState(source.state),
                 scan_supported=source.scan_supported,
                 parser_version=source.parser_version,
+                approved_root_device=source.approved_root_device,
+                approved_root_inode=source.approved_root_inode,
             )
             result = connector.scan(descriptor, cursor)
         except (OSError, ValueError):
