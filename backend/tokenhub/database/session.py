@@ -12,7 +12,13 @@ def create_engine_for(settings: TokenHubSettings) -> Engine:
     """Create the sole application database under TokenHub's data directory."""
     database_path = settings.data_directory / "tokenhub.sqlite3"
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    engine = create_engine(f"sqlite:///{database_path}")
+    engine = create_engine(
+        f"sqlite:///{database_path}",
+        # The engine is created during ASGI startup, while sync routes run in a
+        # worker threadpool, so a pooled connection can legitimately be used
+        # from a different thread than the one that opened it.
+        connect_args={"check_same_thread": False},
+    )
 
     @event.listens_for(engine, "connect")
     def configure_sqlite_connection(dbapi_connection: Connection, _: object) -> None:
