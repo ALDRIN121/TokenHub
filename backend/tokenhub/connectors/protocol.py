@@ -60,6 +60,8 @@ class ScanResult:
     events: tuple[UsageEvent, ...] = ()
     cursor: SyncCursor | None = None
     reason_code: str | None = None
+    partial_final_record: bool = False
+    unsupported_records: int = 0
 
 
 class UsageConnector(Protocol):
@@ -70,12 +72,16 @@ class UsageConnector(Protocol):
 
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]: ...
 
-    def scan(self, source: SourceDescriptor, cursor: SyncCursor | None) -> ScanResult: ...
+    def scan(
+        self, source: SourceDescriptor, cursor: SyncCursor | None
+    ) -> ScanResult: ...
 
     def capabilities(self) -> ConnectorCapabilities: ...
 
 
-def select_root(context: DiscoveryContext, override_key: str, default_name: str) -> Path:
+def select_root(
+    context: DiscoveryContext, override_key: str, default_name: str
+) -> Path:
     """Use an existing injected override directory or the injected home root."""
     override = context.environment.get(override_key)
     if override:

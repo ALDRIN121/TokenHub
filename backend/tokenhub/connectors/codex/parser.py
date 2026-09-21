@@ -1,5 +1,6 @@
 """Streaming parser for approved Codex session usage records."""
 
+import hashlib
 import json
 import os
 import stat
@@ -31,16 +32,44 @@ class ParsedCodexScan:
     safe_byte_offset: int
     partial_final_record: bool
     unsupported_records: int
+    source_mtime_ns: int
+    safe_prefix_fingerprint: str
 
 
-def parse_codex_jsonl(source: SourceDescriptor, start_offset: int) -> ParsedCodexScan:
+def parse_codex_jsonl(
+    source: SourceDescriptor,
+    start_offset: int,
+    expected_prefix_fingerprint: str | None = None,
+) -> ParsedCodexScan:
     """Parse completed token-usage lines without retaining their raw content."""
+    if start_offset < 0:
+        raise ValueError("start offset must be nonnegative")
     events: list[UsageEvent] = []
     safe_byte_offset = start_offset
     unsupported_records = 0
     partial_final_record = False
 
     with os.fdopen(_open_approved_source(source), "rb") as session_file:
+        source_stat = os.fstat(session_file.fileno())
+        prefix_hasher = hashlib.sha256()
+        if start_offset > source_stat.st_size:
+            start_offset = 0
+            safe_byte_offset = 0
+        elif start_offset > 0:
+            remaining = start_offset
+            while remaining:
+                chunk = session_file.read(min(remaining, 1024 * 1024))
+                if not chunk:
+                    break
+                prefix_hasher.update(chunk)
+                remaining -= len(chunk)
+            if remaining or (
+                expected_prefix_fingerprint is not None
+                and prefix_hasher.hexdigest() != expected_prefix_fingerprint
+            ):
+                start_offset = 0
+                safe_byte_offset = 0
+                prefix_hasher = hashlib.sha256()
         session_file.seek(start_offset)
         while raw_line := session_file.readline():
             if not raw_line.endswith(b"\n"):
@@ -48,6 +77,7 @@ def parse_codex_jsonl(source: SourceDescriptor, start_offset: int) -> ParsedCode
                 break
 
             safe_byte_offset += len(raw_line)
+            prefix_hasher.update(raw_line)
             event = _parse_completed_line(raw_line, source)
             if event is None:
                 unsupported_records += 1
@@ -59,10 +89,14 @@ def parse_codex_jsonl(source: SourceDescriptor, start_offset: int) -> ParsedCode
         safe_byte_offset=safe_byte_offset,
         partial_final_record=partial_final_record,
         unsupported_records=unsupported_records,
+        source_mtime_ns=source_stat.st_mtime_ns,
+        safe_prefix_fingerprint=prefix_hasher.hexdigest(),
     )
 
 
-def _parse_completed_line(raw_line: bytes, source: SourceDescriptor) -> UsageEvent | None:
+def _parse_completed_line(
+    raw_line: bytes, source: SourceDescriptor
+) -> UsageEvent | None:
     try:
         record = json.loads(raw_line)
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -112,7 +146,11 @@ def _parse_completed_line(raw_line: bytes, source: SourceDescriptor) -> UsageEve
 
 
 def _is_nonempty_ordinal(value: Any) -> bool:
-    return isinstance(value, (int, str)) and not isinstance(value, bool) and bool(str(value).strip())
+    return (
+        isinstance(value, (int, str))
+        and not isinstance(value, bool)
+        and bool(str(value).strip())
+    )
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -146,7 +184,9 @@ def _open_approved_source(source: SourceDescriptor) -> int:
     try:
         directory_descriptors = [root_descriptor]
         for component in relative_path.parts[:-1]:
-            directory_descriptors.append(_open_directory(component, directory_descriptors[-1]))
+            directory_descriptors.append(
+                _open_directory(component, directory_descriptors[-1])
+            )
         return _open_regular_file(relative_path.name, directory_descriptors[-1])
     except (OSError, ValueError) as error:
         raise ValueError("approved source cannot be opened safely") from error

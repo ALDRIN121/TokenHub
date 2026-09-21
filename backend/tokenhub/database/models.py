@@ -54,6 +54,7 @@ class SyncCursorRecord(Base):
     byte_offset: Mapped[int] = mapped_column(Integer, nullable=False)
     source_mtime_ns: Mapped[int | None] = mapped_column(Integer)
     parser_version: Mapped[str] = mapped_column(String, nullable=False)
+    prefix_fingerprint: Mapped[str | None] = mapped_column(String)
 
 
 class ImportRunRecord(Base):

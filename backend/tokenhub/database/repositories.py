@@ -1,9 +1,9 @@
 """Repositories that keep source approval and scan persistence transactional."""
 
-from dataclasses import dataclass
+from datetime import UTC
 from typing import Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
@@ -15,18 +15,18 @@ from tokenhub.database.models import (
     UsageEventRecord,
 )
 from tokenhub.domain.models import (
+    APPROVED_SOURCE_STATES,
+    DashboardSummary,
     ImportOutcome,
+    MeasurementType,
+    Quality,
     SourceDescriptor,
+    SourceFreshness,
     SourceState,
     SyncCursor,
     UsageEvent,
 )
 from tokenhub.security.paths import validate_source_path
-
-
-@dataclass(frozen=True, slots=True)
-class DashboardTotals:
-    workload_tokens: int
 
 
 class SourceRepository:
@@ -40,7 +40,9 @@ class SourceRepository:
         """Record safe discovery metadata without writing an absolute path."""
         return self.upsert_discoveries([candidate])[0]
 
-    def upsert_discoveries(self, candidates: list[SourceDescriptor]) -> list[SourceRecord]:
+    def upsert_discoveries(
+        self, candidates: list[SourceDescriptor]
+    ) -> list[SourceRecord]:
         """Persist one connector's safe candidates atomically before caching them."""
         if not candidates:
             return []
@@ -84,7 +86,9 @@ class SourceRepository:
         candidate = self._pending_candidates.get(source_id)
         if candidate is None:
             raise ValueError("source must be discovered in this approval session")
-        approved_path = validate_source_path(candidate.canonical_path, candidate.approved_root)
+        approved_path = validate_source_path(
+            candidate.canonical_path, candidate.approved_root
+        )
         with self.session.begin():
             source = self.session.get(SourceRecord, source_id)
             if source is None:
@@ -104,6 +108,37 @@ class SourceRepository:
             raise LookupError(f"unknown source: {source_id}")
         return source
 
+    def get(self, source_id: str) -> SourceRecord:
+        """Read a detached source without leaving an implicit transaction open."""
+        with self.session.begin():
+            source = self._source(source_id)
+            self.session.expunge(source)
+            return source
+
+    def approved_sources(self) -> list[SourceRecord]:
+        """Recover durable approvals without consulting discovery or provider roots."""
+        with self.session.begin():
+            sources = list(
+                self.session.scalars(
+                    select(SourceRecord)
+                    .where(
+                        SourceRecord.canonical_path.is_not(None),
+                        SourceRecord.approved_root.is_not(None),
+                        SourceRecord.state.in_(
+                            [state.value for state in APPROVED_SOURCE_STATES]
+                        ),
+                    )
+                    .order_by(SourceRecord.source_id)
+                )
+            )
+            for source in sources:
+                self.session.expunge(source)
+            return sources
+
+    def set_state(self, source_id: str, state: SourceState) -> None:
+        with self.session.begin():
+            self._source(source_id).state = state.value
+
 
 class UsageRepository:
     """Persistence for normalized events, scan cursors, and import audit records."""
@@ -111,7 +146,17 @@ class UsageRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def persist_scan(self, events: list[UsageEvent], cursor: SyncCursor) -> ImportOutcome:
+    def persist_scan(
+        self,
+        events: list[UsageEvent],
+        cursor: SyncCursor,
+        *,
+        state: SourceState | None = None,
+        partial_final_record: bool = False,
+        unsupported_records: int = 0,
+    ) -> ImportOutcome:
+        if any(event.source_id != cursor.source_id for event in events):
+            raise ValueError("scan events and cursor must belong to the same source")
         inserted_events = 0
         with self.session.begin():
             for usage_event in events:
@@ -132,7 +177,9 @@ class UsageRepository:
                         quality=usage_event.quality.value,
                         parser_version=usage_event.parser_version,
                     )
-                    .on_conflict_do_nothing(index_elements=["source_id", "record_identity"])
+                    .on_conflict_do_nothing(
+                        index_elements=["source_id", "record_identity"]
+                    )
                 )
                 inserted_events += cast(CursorResult[Any], result).rowcount
             self.session.execute(
@@ -142,6 +189,7 @@ class UsageRepository:
                     byte_offset=cursor.byte_offset,
                     source_mtime_ns=cursor.source_mtime_ns,
                     parser_version=cursor.parser_version,
+                    prefix_fingerprint=cursor.prefix_fingerprint,
                 )
                 .on_conflict_do_update(
                     index_elements=["source_id"],
@@ -149,6 +197,7 @@ class UsageRepository:
                         "byte_offset": cursor.byte_offset,
                         "source_mtime_ns": cursor.source_mtime_ns,
                         "parser_version": cursor.parser_version,
+                        "prefix_fingerprint": cursor.prefix_fingerprint,
                     },
                 )
             )
@@ -157,12 +206,24 @@ class UsageRepository:
                     source_id=cursor.source_id,
                     inserted_events=inserted_events,
                     duplicate_events=len(events) - inserted_events,
+                    partial_final_record=partial_final_record,
+                    unsupported_records=unsupported_records,
                 )
             )
+            if state is not None:
+                state_result = self.session.execute(
+                    update(SourceRecord)
+                    .where(SourceRecord.source_id == cursor.source_id)
+                    .values(state=state.value)
+                )
+                if cast(CursorResult[Any], state_result).rowcount != 1:
+                    raise LookupError("source disappeared before scan persistence")
         return ImportOutcome(
             inserted_events=inserted_events,
             duplicate_events=len(events) - inserted_events,
             cursor=cursor,
+            partial_final_record=partial_final_record,
+            unsupported_records=unsupported_records,
         )
 
     def current_cursor(self, source_id: str) -> SyncCursor | None:
@@ -175,15 +236,86 @@ class UsageRepository:
                 byte_offset=cursor.byte_offset,
                 source_mtime_ns=cursor.source_mtime_ns,
                 parser_version=cursor.parser_version,
+                prefix_fingerprint=cursor.prefix_fingerprint,
             )
 
-    def dashboard_totals(self) -> DashboardTotals:
+    def clear_normalized(self) -> None:
+        """Clear only derived events and cursors; preserve approvals and audit history."""
         with self.session.begin():
-            workload = self.session.scalar(
+            self.session.execute(delete(UsageEventRecord))
+            self.session.execute(delete(SyncCursorRecord))
+
+    def dashboard_totals(self) -> DashboardSummary:
+        """Sum observed delta values, preserving SQL NULL for unknown/no data."""
+        events = UsageEventRecord
+        delta = events.measurement_type == MeasurementType.DELTA.value
+        with self.session.begin():
+            totals = self.session.execute(
                 select(
-                    func.coalesce(
-                        func.sum(UsageEventRecord.input_total_tokens + UsageEventRecord.output_total_tokens), 0
+                    func.sum(events.input_total_tokens + events.output_total_tokens),
+                    func.sum(events.input_total_tokens),
+                    func.sum(events.output_total_tokens),
+                    func.sum(events.cache_read_tokens),
+                    func.sum(events.cache_write_tokens),
+                    func.sum(events.reasoning_tokens),
+                    func.count(),
+                ).where(delta)
+            ).one()
+            quality_counts = {quality: 0 for quality in Quality}
+            for quality, count in self.session.execute(
+                select(events.quality, func.count())
+                .where(delta)
+                .group_by(events.quality)
+            ):
+                quality_counts[Quality(quality)] = count
+            latest_events = (
+                select(
+                    events.source_id,
+                    func.max(events.timestamp).label("latest_event_at"),
+                )
+                .where(delta)
+                .group_by(events.source_id)
+                .subquery()
+            )
+            freshness = tuple(
+                SourceFreshness(
+                    source_id=source_id,
+                    state=SourceState(state),
+                    parser_version=parser_version,
+                    latest_event_at=(
+                        latest_event_at.replace(tzinfo=UTC)
+                        if latest_event_at is not None
+                        else None
+                    ),
+                    source_mtime_ns=mtime,
+                )
+                for source_id, state, parser_version, latest_event_at, mtime in self.session.execute(
+                    select(
+                        SourceRecord.source_id,
+                        SourceRecord.state,
+                        SourceRecord.parser_version,
+                        latest_events.c.latest_event_at,
+                        SyncCursorRecord.source_mtime_ns,
                     )
+                    .outerjoin(
+                        latest_events,
+                        latest_events.c.source_id == SourceRecord.source_id,
+                    )
+                    .outerjoin(
+                        SyncCursorRecord,
+                        SyncCursorRecord.source_id == SourceRecord.source_id,
+                    )
+                    .order_by(SourceRecord.source_id)
                 )
             )
-            return DashboardTotals(workload_tokens=int(workload or 0))
+            return DashboardSummary(
+                workload_tokens=totals[0],
+                input_total_tokens=totals[1],
+                output_total_tokens=totals[2],
+                cache_read_tokens=totals[3],
+                cache_write_tokens=totals[4],
+                reasoning_tokens=totals[5],
+                event_count=totals[6],
+                source_freshness=freshness,
+                quality_counts=quality_counts,
+            )

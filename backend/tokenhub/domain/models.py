@@ -109,9 +109,10 @@ class SourceDescriptor:
             spelling = os.fspath(path)
             if os.altsep is not None:
                 spelling = spelling.replace(os.altsep, os.sep)
-            if any(part in {".", ".."} for part in spelling.split(os.sep)) or not Path(
-                spelling
-            ).is_absolute():
+            if (
+                any(part in {".", ".."} for part in spelling.split(os.sep))
+                or not Path(spelling).is_absolute()
+            ):
                 raise ValueError("source paths must be absolute without dot components")
 
         object.__setattr__(self, "source_id", source_id)
@@ -151,6 +152,7 @@ class SyncCursor:
     byte_offset: int
     source_mtime_ns: int | None
     parser_version: str
+    prefix_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,3 +164,54 @@ class ImportOutcome:
     cursor: SyncCursor
     partial_final_record: bool = False
     unsupported_records: int = 0
+
+
+# These states retain explicit approval through successful scans and retryable failures.
+APPROVED_SOURCE_STATES = frozenset(
+    {
+        SourceState.APPROVED,
+        SourceState.HEALTHY,
+        SourceState.PARTIAL,
+        SourceState.ERROR,
+        SourceState.PERMISSION_DENIED,
+        SourceState.SOURCE_MISSING,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFreshness:
+    """Stable observed freshness, without exposing a provider path."""
+
+    source_id: str
+    state: SourceState
+    parser_version: str | None
+    latest_event_at: datetime | None
+    source_mtime_ns: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardSummary:
+    """Observed delta totals; unknown metrics remain nullable."""
+
+    workload_tokens: int | None
+    input_total_tokens: int | None
+    output_total_tokens: int | None
+    cache_read_tokens: int | None
+    cache_write_tokens: int | None
+    reasoning_tokens: int | None
+    event_count: int
+    source_freshness: tuple[SourceFreshness, ...]
+    quality_counts: dict[Quality, int]
+
+
+@dataclass(frozen=True, slots=True)
+class RebuildOutcome:
+    """Successful imports and safe identifiers of sources needing attention."""
+
+    imports: tuple[ImportOutcome, ...]
+    failed_source_ids: tuple[str, ...] = ()
+
+    @property
+    def inserted_events(self) -> int:
+        return sum(outcome.inserted_events for outcome in self.imports)

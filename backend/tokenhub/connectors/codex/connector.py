@@ -12,7 +12,13 @@ from tokenhub.connectors.protocol import (
     ScanResult,
     select_root,
 )
-from tokenhub.domain.models import Provider, SourceDescriptor, SourceState, SyncCursor
+from tokenhub.domain.models import (
+    APPROVED_SOURCE_STATES,
+    Provider,
+    SourceDescriptor,
+    SourceState,
+    SyncCursor,
+)
 
 
 class CodexConnector:
@@ -36,7 +42,9 @@ class CodexConnector:
             provider=self.provider,
             state=SourceState.DISCOVERED if evidence else SourceState.SOURCE_MISSING,
             evidence_codes=tuple(evidence),
-            sources=tuple(SafeSourceView.model_validate(source.safe_view()) for source in sources),
+            sources=tuple(
+                SafeSourceView.model_validate(source.safe_view()) for source in sources
+            ),
         )
 
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
@@ -50,7 +58,8 @@ class CodexConnector:
             dirnames[:] = sorted(
                 name
                 for name in dirnames
-                if name not in {"auth", "config", "history", "logs", "log", "cache", "caches"}
+                if name
+                not in {"auth", "config", "history", "logs", "log", "cache", "caches"}
                 and not (Path(directory) / name).is_symlink()
             )
             for filename in sorted(filenames):
@@ -89,7 +98,59 @@ class CodexConnector:
         return candidates
 
     def scan(self, source: SourceDescriptor, cursor: SyncCursor | None) -> ScanResult:
-        return ScanResult(state=SourceState.UNSUPPORTED, reason_code="parser_not_installed")
+        capabilities = self.capabilities()
+        if (
+            source.connector_id != self.connector_id
+            or source.provider is not self.provider
+            or not source.scan_supported
+            or source.source_type != capabilities.source_type
+            or source.parser_version != capabilities.parser_version
+        ):
+            return ScanResult(
+                state=SourceState.UNSUPPORTED, reason_code="unsupported_source"
+            )
+        if source.state not in APPROVED_SOURCE_STATES:
+            return ScanResult(state=source.state, reason_code="source_not_approved")
+        if cursor is not None and cursor.source_id != source.source_id:
+            raise ValueError("cursor belongs to a different source")
+
+        # Import and file access occur only after the approved-source checks.
+        from tokenhub.connectors.codex.parser import parse_codex_jsonl
+
+        start_offset = (
+            cursor.byte_offset
+            if cursor is not None
+            and cursor.parser_version == capabilities.parser_version
+            and cursor.prefix_fingerprint is not None
+            else 0
+        )
+        parsed = parse_codex_jsonl(
+            source,
+            start_offset,
+            (
+                cursor.prefix_fingerprint
+                if cursor is not None
+                and cursor.parser_version == capabilities.parser_version
+                else None
+            ),
+        )
+        return ScanResult(
+            state=(
+                SourceState.PARTIAL
+                if parsed.partial_final_record or parsed.unsupported_records
+                else SourceState.HEALTHY
+            ),
+            events=tuple(parsed.events),
+            cursor=SyncCursor(
+                source_id=source.source_id,
+                byte_offset=parsed.safe_byte_offset,
+                source_mtime_ns=parsed.source_mtime_ns,
+                parser_version=capabilities.parser_version or "codex-jsonl-v1",
+                prefix_fingerprint=parsed.safe_prefix_fingerprint,
+            ),
+            partial_final_record=parsed.partial_final_record,
+            unsupported_records=parsed.unsupported_records,
+        )
 
     def capabilities(self) -> ConnectorCapabilities:
         return ConnectorCapabilities(
