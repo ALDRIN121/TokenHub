@@ -153,3 +153,32 @@ This is consistent with the official Codex configuration model: `CODEX_HOME` is 
 2. **First complete connector:** Codex is the first importable connector because the local installed format can be researched safely and supports the required delta/cumulative semantic separation. Cost if wrong: another connector may prove more representative, but the provider-neutral contract remains reusable.
 3. **No silent imports:** Even the auto-detected Codex session root remains unparsed until approval. Cost if wrong: first-run friction is slightly higher; privacy and source-integrity requirements remain intact.
 4. **No provider telemetry inference from unsafe stores:** Claude transcript trees and Hermes message tables are out of bounds until a schema-specific metadata-only connector is designed. Cost if wrong: initial usage coverage is lower rather than potentially persisting private content.
+
+## Verified deviations recorded during implementation
+
+Recorded by Task 9 after the implementation and review gates, so the spec and the
+shipped behavior can be compared directly.
+
+1. **`/api/v1/discovery` does not return a `confidence` field.** The API contract
+   above lists `confidence` alongside display name, connection state, safe
+   evidence, and the source identifier. The shipped route returns the evidence
+   codes but no confidence value. The UI derives a confidence label from the
+   number of evidence codes and labels it explicitly as derived
+   ("high/medium/low (derived from local evidence)") rather than presenting a
+   computed value as API data. Adding a real field is a follow-up to Tasks 4/6,
+   not a Task 7-9 change.
+2. **The CLI does not open a browser.** `main()` prints the loopback URL and
+   starts Uvicorn; nothing auto-opens a browser window. The spec never required
+   auto-open, so this is a deliberate omission rather than a broken promise.
+3. **Settings bind policy.** `TokenHubSettings` gained a loopback-only bind
+   validation and the `port` default moved to `7432` (from `8000`) so the
+   process cannot be started on a wildcard address even if a caller passes one.
+4. **`OSError → 400 "Source is unavailable"` is retained defensively** in the
+   route error map. Current service paths wrap `OSError` into `ValueError`, so
+   the mapping is not reached over HTTP; it stays because it is a valid mapping
+   for a future connector that raises `OSError` directly.
+5. **The API and security tests are stricter than the plan's snippets** (50
+   rejected Host spellings, adversarial Origin forms, duplicate-header
+   rejection, forced-unknown exception → redacted 500). They were written as the
+   frozen contract in Task 7 Step 1 and the implementation was made to satisfy
+   them, not the other way round.
