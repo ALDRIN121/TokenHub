@@ -3,68 +3,60 @@ import type { DashboardSummary, DataQualityResponse, DiscoveryResponse } from '.
 /**
  * Synthetic fixtures only: no real home directory, no real provider data, no
  * absolute paths (the API returns fingerprints, and the UI shows none of them).
+ *
+ * Field values mirror what the real connectors emit, so the tests exercise the
+ * shapes the app will actually receive: connector ids are `*-local`, providers
+ * are the `Provider` enum values, and evidence codes are the codes the
+ * connectors append (see backend/tokenhub/connectors, one module per provider).
  */
-
 export const discoveryFixture: DiscoveryResponse = {
   providers: [
     {
-      connector_id: 'claude',
+      connector_id: 'claude-code-local',
       display_name: 'Claude Code',
-      provider: 'anthropic',
+      provider: 'claude_code',
       state: 'discovered',
-      evidence_codes: ['directory_present'],
-      sources: [
-        {
-          source_id: 'claude-code:config',
-          connector_id: 'claude',
-          provider: 'anthropic',
-          display_name: 'Claude Code configuration directory',
-          source_type: 'directory',
-          path_fingerprint: 'fp-0000-claude',
-          state: 'discovered',
-          evidence_codes: ['directory_present'],
-          scan_supported: false,
-          parser_version: null,
-        },
-      ],
+      evidence_codes: ['known_root_exists', 'configuration_found'],
+      // The Claude Code connector is presence-only: it never reports a source.
+      sources: [],
     },
     {
-      connector_id: 'codex',
+      connector_id: 'codex-local',
       display_name: 'OpenAI Codex',
-      provider: 'openai',
+      provider: 'codex',
       state: 'discovered',
-      evidence_codes: ['directory_present', 'sessions_present'],
+      evidence_codes: ['known_root_exists', 'session_source_found'],
       sources: [
         {
-          source_id: 'codex:sessions',
-          connector_id: 'codex',
-          provider: 'openai',
-          display_name: 'OpenAI Codex sessions',
-          source_type: 'jsonl_sessions',
-          path_fingerprint: 'fp-0000-codex',
+          source_id: 'codex-local:3f9a1c47d2b8e05f6a1c93d47e0b25a8c6f1d93e47b2a05c8d1f63e9a472c8b05',
+          connector_id: 'codex-local',
+          provider: 'codex',
+          display_name: 'Codex session',
+          source_type: 'jsonl',
+          path_fingerprint: '3f9a1c47d2b8e05f6a1c93d47e0b25a8c6f1d93e47b2a05c8d1f63e9a472c8b05',
           state: 'discovered',
-          evidence_codes: ['directory_present', 'sessions_present'],
+          evidence_codes: ['session_source_found'],
           scan_supported: true,
-          parser_version: 'codex-token-usage/1',
+          parser_version: 'codex-jsonl-v1',
         },
       ],
     },
     {
-      connector_id: 'hermes',
-      display_name: 'Hermes',
-      provider: 'nousresearch',
-      state: 'discovered',
-      evidence_codes: ['database_present'],
+      connector_id: 'hermes-local',
+      display_name: 'Hermes Agent',
+      provider: 'hermes',
+      state: 'unsupported',
+      evidence_codes: ['known_root_exists', 'state_database_found'],
       sources: [
         {
-          source_id: 'hermes:state',
-          connector_id: 'hermes',
-          provider: 'nousresearch',
+          source_id: 'hermes-local:a1d7f3c95b2e84016f9c3a75d0b8e142c6f3d91a7b2e50834c9d1f6a3b8e2074',
+          connector_id: 'hermes-local',
+          provider: 'hermes',
           display_name: 'Hermes state database',
-          source_type: 'sqlite_database',
-          path_fingerprint: 'fp-0000-hermes',
-          state: 'discovered',
-          evidence_codes: ['database_present'],
+          source_type: 'sqlite',
+          path_fingerprint: 'a1d7f3c95b2e84016f9c3a75d0b8e142c6f3d91a7b2e50834c9d1f6a3b8e2074',
+          state: 'unsupported',
+          evidence_codes: ['state_database_found'],
           scan_supported: false,
           parser_version: null,
         },
@@ -77,7 +69,7 @@ export const discoveryFixture: DiscoveryResponse = {
 export function discoveryWithCodexState(state: string): DiscoveryResponse {
   return {
     providers: discoveryFixture.providers.map((provider) =>
-      provider.connector_id === 'codex'
+      provider.connector_id === 'codex-local'
         ? {
             ...provider,
             state,
@@ -99,14 +91,14 @@ export const dashboardFixture: DashboardSummary = {
   quality_counts: { exact: 11, partial: 1 },
   source_freshness: [
     {
-      source_id: 'codex:sessions',
+      source_id: 'codex-local:3f9a1c47d2b8e05f6a1c93d47e0b25a8c6f1d93e47b2a05c8d1f63e9a472c8b05',
       state: 'healthy',
       latest_event_at: '2026-09-20T12:00:00Z',
       unsupported_records: 0,
     },
     {
-      source_id: 'claude-code:config',
-      state: 'approved',
+      source_id: 'hermes-local:a1d7f3c95b2e84016f9c3a75d0b8e142c6f3d91a7b2e50834c9d1f6a3b8e2074',
+      state: 'unsupported',
       latest_event_at: null,
       unsupported_records: null,
     },

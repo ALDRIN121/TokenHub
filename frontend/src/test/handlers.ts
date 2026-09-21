@@ -33,8 +33,8 @@ export const handlers = [
     }
     return HttpResponse.json({
       source_id: String(params.sourceId),
-      provider: 'openai',
-      display_name: 'OpenAI Codex sessions',
+      provider: 'codex',
+      display_name: 'Codex session',
       state: 'approved',
     });
   }),

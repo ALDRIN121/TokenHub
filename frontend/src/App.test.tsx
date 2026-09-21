@@ -22,13 +22,17 @@ describe('TokenHub client', () => {
     expect(screen.getByRole('button', { name: 'Approve source' })).toBeEnabled();
 
     // Only the scan-capable Codex source offers an action; the discovery-only
-    // Claude Code and Hermes sources stay read-only and report their support status.
+    // Hermes source stays read-only, and Claude Code reports no source at all.
     expect(screen.getAllByRole('button', { name: 'Approve source' })).toHaveLength(1);
     expect(screen.queryAllByRole('button', { name: 'Rescan source' })).toHaveLength(0);
 
     const claudeCard = screen.getByRole('article', { name: 'Claude Code' });
-    expect(within(claudeCard).getByText(/Discovery only/, { selector: 'p' })).toBeInTheDocument();
+    expect(within(claudeCard).getByText(/No local source was found/)).toBeInTheDocument();
     expect(within(claudeCard).queryAllByRole('button')).toHaveLength(0);
+
+    const hermesCard = screen.getByRole('article', { name: 'Hermes Agent' });
+    expect(within(hermesCard).getByText(/Discovery only/, { selector: 'p' })).toBeInTheDocument();
+    expect(within(hermesCard).queryAllByRole('button')).toHaveLength(0);
 
     const codexCard = screen.getByRole('article', { name: 'OpenAI Codex' });
     expect(within(codexCard).getByRole('button', { name: 'Approve source' })).toBeEnabled();
@@ -66,8 +70,8 @@ describe('TokenHub client', () => {
         seenOrigins.push(request.headers.get('origin'));
         return HttpResponse.json({
           source_id: String(params.sourceId),
-          provider: 'openai',
-          display_name: 'OpenAI Codex sessions',
+          provider: 'codex',
+          display_name: 'Codex session',
           state: 'approved',
         });
       }),
@@ -76,9 +80,7 @@ describe('TokenHub client', () => {
     render(<App />);
     await user.click(await screen.findByRole('button', { name: 'Approve source' }));
 
-    expect(await screen.findByRole('status')).toHaveTextContent(
-      /OpenAI Codex sessions is approved/i,
-    );
+    expect(await screen.findByRole('status')).toHaveTextContent(/Codex session is approved/i);
     expect(seenOrigins).toEqual([window.location.origin]);
   });
 
@@ -103,17 +105,19 @@ describe('TokenHub client', () => {
     server.use(
       http.get('/api/v1/data-quality', () =>
         HttpResponse.json({
-          quality_counts: { partial: 1, unsupported: 2 },
+          quality_counts: { partial: 1, unavailable: 2 },
           source_freshness: [
             {
-              source_id: 'codex:sessions',
+              source_id:
+                'codex-local:3f9a1c47d2b8e05f6a1c93d47e0b25a8c6f1d93e47b2a05c8d1f63e9a472c8b05',
               state: 'partial',
               latest_event_at: '2026-09-20T12:00:00Z',
               unsupported_records: 2,
             },
             {
-              source_id: 'claude-code:config',
-              state: 'permission_denied',
+              source_id:
+                'hermes-local:a1d7f3c95b2e84016f9c3a75d0b8e142c6f3d91a7b2e50834c9d1f6a3b8e2074',
+              state: 'unsupported',
               latest_event_at: null,
               unsupported_records: null,
             },
@@ -125,9 +129,9 @@ describe('TokenHub client', () => {
     render(<App />);
 
     expect(await screen.findByRole('heading', { name: 'Data quality' })).toBeInTheDocument();
-    expect(screen.getByText('OpenAI Codex sessions')).toBeInTheDocument();
-    expect(screen.getByText('Claude Code configuration directory')).toBeInTheDocument();
+    expect(screen.getByText('Codex session')).toBeInTheDocument();
+    expect(screen.getByText('Hermes state database')).toBeInTheDocument();
     expect(screen.getByText('Unsupported records: 2')).toBeInTheDocument();
-    expect(screen.getByText(/not fully readable \(partial, permission_denied\)/)).toBeInTheDocument();
+    expect(screen.getByText(/not fully readable \(partial, unsupported\)/)).toBeInTheDocument();
   });
 });

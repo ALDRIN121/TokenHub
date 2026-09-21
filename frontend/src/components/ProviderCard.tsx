@@ -1,25 +1,42 @@
 import type { ProviderSummary } from '../types';
 
 const EVIDENCE_LABELS: Record<string, string> = {
-  directory_present: 'provider directory present',
-  sessions_present: 'session directory present',
-  database_present: 'state database present',
-  file_present: 'expected file present',
-  env_var_set: 'home override configured',
+  executable_on_path: 'provider command on PATH',
+  known_root_exists: 'known root directory present',
+  configuration_found: 'configuration file present',
+  session_source_found: 'session source found',
+  state_database_found: 'state database found',
 };
 
-/** Sources in these states can be scanned again, but only if the connector scans. */
-const RESCANNABLE_STATES = new Set(['approved', 'healthy', 'partial', 'error']);
+/**
+ * Sources in these states keep their approval, so a retry is allowed — the same
+ * set the backend's `APPROVED_SOURCE_STATES` uses.
+ */
+const RESCANNABLE_STATES = new Set([
+  'approved',
+  'healthy',
+  'partial',
+  'error',
+  'permission_denied',
+  'source_missing',
+]);
 
 function evidenceLabel(code: string): string {
   return EVIDENCE_LABELS[code] ?? code.split('_').join(' ');
 }
 
+/**
+ * The `/discovery` route does not currently return a confidence field, so this
+ * is derived from how many independent pieces of evidence were recorded. The
+ * label says so, because the UI never presents a derived number as API data.
+ */
 function confidenceFor(evidenceCount: number): string {
   if (evidenceCount >= 2) {
-    return 'high';
+    return 'high (derived from local evidence)';
   }
-  return evidenceCount === 1 ? 'medium' : 'low';
+  return evidenceCount === 1
+    ? 'medium (derived from local evidence)'
+    : 'low (derived from local evidence)';
 }
 
 interface ProviderCardProps {
