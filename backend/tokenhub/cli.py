@@ -4,9 +4,9 @@ Serves the API and the built UI on loopback only. Providers are discovered at
 runtime from the real home directory, documented environment overrides, and
 PATH — nothing about this machine is compiled into the package.
 
-The server never opens a browser window: the spec forbids the app from reaching
-outside its own process, and the loopback URL is printed by uvicorn's default
-startup log. Open it yourself, or use :func:`loopback_url`.
+The server prints its loopback URL and does not open a browser window: nothing
+in the product spec asks for one, and a local-first tool should not reach
+outside its own process unprompted.
 """
 
 from __future__ import annotations
