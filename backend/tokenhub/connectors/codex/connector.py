@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import stat
 from pathlib import Path
 
 from tokenhub.connectors.protocol import (
@@ -19,7 +20,12 @@ from tokenhub.domain.models import (
     SourceState,
     SyncCursor,
 )
-from tokenhub.security.paths import directory_identity
+from tokenhub.security.paths import (
+    anchor_directory,
+    list_directory,
+    open_directory_entry,
+    stat_directory_entry,
+)
 
 
 class CodexConnector:
@@ -31,7 +37,7 @@ class CodexConnector:
         evidence: list[str] = []
         if context.which("codex") is not None:
             evidence.append("executable_on_path")
-        root = select_root(context, "CODEX_HOME", ".codex")
+        root = select_root(context, "CODEX_HOME", ".codex", canonicalize=False)
         if root.is_dir() and not root.is_symlink():
             evidence.append("known_root_exists")
         sources = self.discover_sources(context)
@@ -49,46 +55,74 @@ class CodexConnector:
         )
 
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
-        root = select_root(context, "CODEX_HOME", ".codex")
+        root = select_root(context, "CODEX_HOME", ".codex", canonicalize=False)
         sessions = root / "sessions"
+        # These checks cheaply classify stable missing/symlink roots. The
+        # descriptor anchor below remains the authority if the path changes.
         if root.is_symlink() or not sessions.is_dir() or sessions.is_symlink():
             return []
-        approved_root = sessions.resolve(strict=True)
-        approved_root_device, approved_root_inode = directory_identity(approved_root)
-        candidates: list[SourceDescriptor] = []
-        for directory, dirnames, filenames in os.walk(sessions, followlinks=False):
-            dirnames[:] = sorted(
-                name
-                for name in dirnames
-                if name
-                not in {"auth", "config", "history", "logs", "log", "cache", "caches"}
-                and not (Path(directory) / name).is_symlink()
+        with anchor_directory(sessions) as approved_root:
+            return self._discover_anchored_sources(
+                approved_root.path,
+                approved_root.descriptor,
+                approved_root.device,
+                approved_root.inode,
             )
-            for filename in sorted(filenames):
-                if filename.casefold() in {
+
+    def _discover_anchored_sources(
+        self,
+        approved_root: Path,
+        root_descriptor: int,
+        approved_root_device: int,
+        approved_root_inode: int,
+    ) -> list[SourceDescriptor]:
+        candidates: list[SourceDescriptor] = []
+
+        def visit(directory: Path, descriptor: int) -> None:
+            for name in sorted(list_directory(descriptor)):
+                try:
+                    entry_stat = stat_directory_entry(name, descriptor)
+                except FileNotFoundError:
+                    continue
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    if name in {
+                        "auth",
+                        "config",
+                        "history",
+                        "logs",
+                        "log",
+                        "cache",
+                        "caches",
+                    }:
+                        continue
+                    try:
+                        child_descriptor = open_directory_entry(name, descriptor)
+                    except FileNotFoundError:
+                        continue
+                    try:
+                        visit(directory / name, child_descriptor)
+                    finally:
+                        os.close(child_descriptor)
+                    continue
+                if not stat.S_ISREG(entry_stat.st_mode) or not name.endswith(".jsonl"):
+                    continue
+                if name.casefold() in {
                     "auth.jsonl",
                     "cache.jsonl",
                     "config.jsonl",
                     "history.jsonl",
                     "log.jsonl",
-                } or not filename.endswith(".jsonl"):
+                }:
                     continue
-                path = Path(directory) / filename
-                if path.is_symlink() or not path.is_file():
-                    continue
-                canonical = path.resolve(strict=True)
-                try:
-                    canonical.relative_to(approved_root)
-                except ValueError:
-                    continue
-                fingerprint = hashlib.sha256(str(canonical).encode("utf-8")).hexdigest()
+                path = directory / name
+                fingerprint = hashlib.sha256(str(path).encode("utf-8")).hexdigest()
                 candidates.append(
                     SourceDescriptor(
                         source_id=f"{self.connector_id}:{fingerprint}",
                         connector_id=self.connector_id,
                         provider=self.provider,
                         display_name="Codex session",
-                        canonical_path=canonical,
+                        canonical_path=path,
                         approved_root=approved_root,
                         source_type="jsonl",
                         path_fingerprint=fingerprint,
@@ -99,6 +133,8 @@ class CodexConnector:
                         approved_root_inode=approved_root_inode,
                     )
                 )
+
+        visit(approved_root, root_descriptor)
         return candidates
 
     def scan(self, source: SourceDescriptor, cursor: SyncCursor | None) -> ScanResult:

@@ -80,7 +80,11 @@ class UsageConnector(Protocol):
 
 
 def select_root(
-    context: DiscoveryContext, override_key: str, default_name: str
+    context: DiscoveryContext,
+    override_key: str,
+    default_name: str,
+    *,
+    canonicalize: bool = True,
 ) -> Path:
     """Use an existing injected override directory or the injected home root."""
     override = context.environment.get(override_key)
@@ -92,5 +96,8 @@ def select_root(
         else:
             candidate = Path(override)
         if candidate.is_dir() and not candidate.is_symlink():
-            return candidate.resolve(strict=True)
+            if canonicalize:
+                return candidate.resolve(strict=True)
+            if candidate.is_absolute():
+                return candidate
     return context.home / default_name

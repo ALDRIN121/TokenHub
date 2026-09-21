@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import tokenhub.connectors.codex.parser as codex_parser
+import tokenhub.security.paths as security_paths
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from tokenhub.connectors.codex.connector import CodexConnector
@@ -33,6 +35,142 @@ from tests.service_support import (
 
 def forbid_provider_open(*args: object, **kwargs: object) -> int:
     pytest.fail("rejected sources must never reach a provider file open")
+
+
+def exercise_discovery_swap(
+    app_services: Services,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    swap_ancestor: bool,
+) -> None:
+    trusted_sessions = app_services.session_file.parent
+    trusted_codex_home = trusted_sessions.parent
+    outside_codex_home = tmp_path / "outside-codex"
+    outside_sessions = outside_codex_home / "sessions"
+    outside_sessions.mkdir(parents=True)
+    outside_file = outside_sessions / app_services.session_file.name
+    outside_file.write_bytes(token_record(99, input_tokens=999, output_tokens=999))
+    original_resolve = Path.resolve
+    original_open = os.open
+    resolve_calls = 0
+    anchor_opens = 0
+    swapped = False
+
+    def swap_root() -> None:
+        nonlocal swapped
+        if swapped:
+            return
+        if swap_ancestor:
+            trusted_codex_home.rename(trusted_codex_home.with_name(".codex-original"))
+            trusted_codex_home.symlink_to(outside_codex_home, target_is_directory=True)
+        else:
+            trusted_sessions.rename(trusted_sessions.with_name("sessions-original"))
+            trusted_sessions.symlink_to(outside_sessions, target_is_directory=True)
+        swapped = True
+
+    def swap_on_second_resolve(path: Path, *, strict: bool = False) -> Path:
+        nonlocal resolve_calls
+        if path == trusted_sessions:
+            resolve_calls += 1
+            if resolve_calls == 2:
+                swap_root()
+        return original_resolve(path, strict=strict)
+
+    def swap_after_second_anchor_open(
+        path: str | bytes | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal anchor_opens
+        descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+        lexical_path = (
+            Path(os.fsdecode(path)) if isinstance(path, bytes) else Path(path)
+        )
+        anchor_component = Path(".codex" if swap_ancestor else "sessions")
+        # The old implementation calls resolve first; the open hook is for the
+        # anchored implementation and fires only when no root resolve occurred.
+        if (
+            resolve_calls == 0
+            and dir_fd is not None
+            and lexical_path == anchor_component
+        ):
+            anchor_opens += 1
+            if anchor_opens == 2:
+                swap_root()
+        return descriptor
+
+    monkeypatch.setattr(Path, "resolve", swap_on_second_resolve)
+    monkeypatch.setattr(os, "open", swap_after_second_anchor_open)
+    monkeypatch.setattr(codex_parser, "parse_codex_jsonl", forbid_provider_open)
+
+    results = app_services.discovery.discover()
+    codex = next(result for result in results if result.connector_id == "codex-local")
+    assert swapped is True
+    assert len(codex.sources) == 1
+    source_id = codex.sources[0].source_id
+    with pytest.raises(ValueError):
+        app_services.ingestion.approve(source_id)
+    with pytest.raises(ValueError):
+        app_services.ingestion.rescan(source_id)
+
+    assert app_services.analytics.dashboard().event_count == 0
+    stored = app_services.source_repository.get(source_id)
+    assert stored.canonical_path is None
+    assert stored.approved_root is None
+    assert outside_file.read_bytes() == token_record(
+        99, input_tokens=999, output_tokens=999
+    )
+
+
+def test_discovery_root_swap_cannot_become_trusted_source(
+    app_services: Services,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exercise_discovery_swap(
+        app_services,
+        tmp_path,
+        monkeypatch,
+        swap_ancestor=False,
+    )
+
+
+def test_discovery_ancestor_swap_cannot_become_trusted_source(
+    app_services: Services,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exercise_discovery_swap(
+        app_services,
+        tmp_path,
+        monkeypatch,
+        swap_ancestor=True,
+    )
+
+
+def test_discovery_fails_closed_without_secure_directory_traversal(
+    app_services: Services,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(security_paths, "_SECURE_DIR_FD_TRAVERSAL", False)
+
+    results = app_services.discovery.discover()
+
+    codex = next(result for result in results if result.connector_id == "codex-local")
+    assert codex.state == SourceState.ERROR
+    assert codex.sources == ()
+    with app_services.session.begin():
+        assert (
+            app_services.session.scalar(
+                select(func.count())
+                .select_from(SourceRecord)
+                .where(SourceRecord.connector_id == "codex-local")
+            )
+            == 0
+        )
 
 
 def test_rescan_requires_approval_before_opening_source(
@@ -363,15 +501,24 @@ def test_missing_source_state_update_rolls_back_events_cursor_and_audit(
         )
 
     with app_services.session.begin():
-        assert app_services.session.scalar(
-            select(func.count()).select_from(UsageEventRecord)
-        ) == 0
-        assert app_services.session.scalar(
-            select(func.count()).select_from(SyncCursorRecord)
-        ) == 0
-        assert app_services.session.scalar(
-            select(func.count()).select_from(ImportRunRecord)
-        ) == 0
+        assert (
+            app_services.session.scalar(
+                select(func.count()).select_from(UsageEventRecord)
+            )
+            == 0
+        )
+        assert (
+            app_services.session.scalar(
+                select(func.count()).select_from(SyncCursorRecord)
+            )
+            == 0
+        )
+        assert (
+            app_services.session.scalar(
+                select(func.count()).select_from(ImportRunRecord)
+            )
+            == 0
+        )
 
 
 def test_deduplication_is_scoped_to_each_source(app_services: Services) -> None:
@@ -484,10 +631,14 @@ def test_connector_refuses_unapproved_descriptor_before_open(
         assert CodexConnector().scan(changed, None).state is SourceState.UNSUPPORTED
 
 
-def test_truncation_restarts_from_zero_on_securely_opened_file(app_services: Services) -> None:
+def test_truncation_restarts_from_zero_on_securely_opened_file(
+    app_services: Services,
+) -> None:
     source_id = discover_and_approve_codex(app_services)
     app_services.ingestion.rescan(source_id)
-    app_services.session_file.write_bytes(token_record(2, input_tokens=10, output_tokens=5))
+    app_services.session_file.write_bytes(
+        token_record(2, input_tokens=10, output_tokens=5)
+    )
     imported = app_services.ingestion.rescan(source_id)
     assert imported.inserted_events == 1
     assert imported.cursor.byte_offset == app_services.session_file.stat().st_size

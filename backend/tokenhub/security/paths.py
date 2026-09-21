@@ -2,6 +2,9 @@
 
 import os
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 _SECURE_DIR_FD_TRAVERSAL = (
@@ -11,17 +14,58 @@ _SECURE_DIR_FD_TRAVERSAL = (
 )
 
 
-def directory_identity(root: Path) -> tuple[int, int]:
-    """Return a directory identity acquired without following any component."""
+@dataclass(frozen=True, slots=True)
+class AnchoredDirectory:
+    """An absolute directory held open across descriptor-relative operations."""
+
+    path: Path
+    descriptor: int
+    device: int
+    inode: int
+
+
+@contextmanager
+def anchor_directory(root: Path) -> Iterator[AnchoredDirectory]:
+    """Anchor ``root`` from ``/`` without following any path component."""
     try:
         descriptor = _open_absolute_directory(root)
     except (OSError, ValueError) as error:
         raise ValueError("approved root cannot be opened safely") from error
     try:
         root_stat = os.fstat(descriptor)
-        return root_stat.st_dev, root_stat.st_ino
+        yield AnchoredDirectory(
+            path=root,
+            descriptor=descriptor,
+            device=root_stat.st_dev,
+            inode=root_stat.st_ino,
+        )
     finally:
         os.close(descriptor)
+
+
+def list_directory(descriptor: int) -> list[str]:
+    """List names through an already anchored directory descriptor."""
+    _require_secure_directory_enumeration()
+    return os.listdir(descriptor)
+
+
+def stat_directory_entry(name: str, parent_descriptor: int) -> os.stat_result:
+    """Inspect one direct child without following a symbolic link."""
+    _require_secure_directory_enumeration()
+    _validate_child_name(name)
+    return os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+
+
+def open_directory_entry(name: str, parent_descriptor: int) -> int:
+    """Open one direct child directory without following a symbolic link."""
+    _validate_child_name(name)
+    return _open_directory(name, parent_descriptor)
+
+
+def directory_identity(root: Path) -> tuple[int, int]:
+    """Return a directory identity acquired without following any component."""
+    with anchor_directory(root) as anchored:
+        return anchored.device, anchored.inode
 
 
 def validate_source_path(
@@ -82,6 +126,16 @@ def _require_secure_directory_traversal() -> None:
         raise ValueError("secure directory traversal is unavailable")
 
 
+def _require_secure_directory_enumeration() -> None:
+    _require_secure_directory_traversal()
+    if (
+        os.listdir not in os.supports_fd
+        or os.stat not in os.supports_dir_fd
+        or os.stat not in os.supports_follow_symlinks
+    ):
+        raise ValueError("secure directory enumeration is unavailable")
+
+
 def _open_absolute_directory(root: Path) -> int:
     _require_secure_directory_traversal()
     if not _is_absolute_clean_path(root):
@@ -112,6 +166,11 @@ def _open_directory(path: Path | str, parent_descriptor: int | None = None) -> i
         os.close(descriptor)
         raise
     return descriptor
+
+
+def _validate_child_name(name: str) -> None:
+    if not name or name in {".", ".."} or Path(name).name != name:
+        raise ValueError("directory child must be a single path component")
 
 
 def _open_regular_file(name: str, parent_descriptor: int) -> int:
