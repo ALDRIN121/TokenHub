@@ -186,7 +186,7 @@ def test_presence_discovery_does_not_open_provider_files(tmp_path: Path) -> None
     assert results[2].sources[0].source_type == "sqlite"
 
 
-def test_claude_detection_has_no_importable_sources(tmp_path: Path) -> None:
+def test_claude_configuration_alone_has_no_importable_sources(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     root.mkdir()
     (root / "settings.json").write_text("private configuration")
@@ -221,9 +221,9 @@ def test_hermes_exposes_only_direct_database_candidate_without_reading_it(tmp_pa
 
     assert len(sources) == 1
     assert sources[0].canonical_path == direct.resolve()
-    assert sources[0].state is SourceState.UNSUPPORTED
-    assert sources[0].scan_supported is False
-    assert result.state is SourceState.UNSUPPORTED
+    assert sources[0].state is SourceState.DISCOVERED
+    assert sources[0].scan_supported is True
+    assert result.state is SourceState.DISCOVERED
     assert result.events == ()
     assert str(direct) not in str(sources[0].safe_view())
 

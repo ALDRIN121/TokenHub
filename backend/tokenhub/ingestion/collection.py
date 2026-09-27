@@ -28,17 +28,20 @@ class CollectionService:
         self._seen_files: dict[str, tuple[int, int, int, int]] = {}
 
     def enable_codex(self) -> None:
+        self.enable("codex-local")
+
+    def enable(self, connector_id: str) -> None:
         results = self.discovery.discover()
         candidate = next(
             (
                 self.discovery.candidate(source.source_id)
-                for result in results if result.connector_id == "codex-local"
+                for result in results if result.connector_id == connector_id
                 for source in result.sources if source.scan_supported
             ),
             None,
         )
         if candidate is None:
-            raise UnsupportedSourceError("no supported Codex source was discovered")
+            raise UnsupportedSourceError("no supported source was discovered")
         self.sources.enable_auto_import(candidate)
         self.run_once()
 
@@ -66,7 +69,7 @@ class CollectionService:
                     failures.add(view.source_id)
 
         for source in self.sources.approved_sources():
-            if source.connector_id != "codex-local" or not source.scan_supported:
+            if not source.scan_supported:
                 continue
             try:
                 if source.canonical_path is None or source.approved_root is None:
@@ -84,7 +87,8 @@ class CollectionService:
                 identity = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
                 cursor = self.usage.current_cursor(source.source_id)
                 if (
-                    self._seen_files.get(source.source_id) == identity
+                    source.source_type != "sqlite"
+                    and self._seen_files.get(source.source_id) == identity
                     and source.state in {SourceState.HEALTHY.value, SourceState.PARTIAL.value}
                     and cursor is not None
                     and cursor.byte_offset <= metadata.st_size
@@ -102,11 +106,11 @@ class CollectionService:
         self.last_scan_at = datetime.now(UTC)
 
     def status(self, interval: float) -> dict[str, object]:
+        connectors = sorted(root.connector_id for root in self.sources.auto_import_roots())
         return {
             "scan_interval_seconds": interval,
-            "codex_auto_import": any(
-                root.connector_id == "codex-local" for root in self.sources.auto_import_roots()
-            ),
+            "codex_auto_import": "codex-local" in connectors,
+            "auto_import_connectors": connectors,
             "last_scan_at": self.last_scan_at.isoformat() if self.last_scan_at else None,
             "failed_source_count": self.failed_source_count,
         }

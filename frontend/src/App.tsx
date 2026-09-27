@@ -4,23 +4,27 @@ import {
   ApiError,
   approveSource,
   getDashboard,
+  getUsageBreakdown,
   getDataQuality,
   getCollectionStatus,
   getDiscovery,
   rebuildIndex,
   rescanSource,
-  setCodexAutoImport,
+  setProviderAutoImport,
 } from './api/client';
 import { MetricCard } from './components/MetricCard';
 import { ProviderCard, RESCANNABLE_STATES } from './components/ProviderCard';
 import { Icon } from './components/Icon';
+import { UsageExplorer } from './components/UsageExplorer';
 import { UsageComposition } from './components/UsageComposition';
 import type {
   DashboardSummary,
+  UsageBreakdown,
   CollectionStatus,
   DataQualityResponse,
   DiscoveryResponse,
   ImportOutcome,
+  ProviderSummary,
   RebuildOutcome,
   SourceFreshness,
 } from './types';
@@ -111,7 +115,9 @@ function explainQuality(freshness: SourceFreshness[]): string {
   );
 }
 
-export default function App() {
+export default function App({ initialView = "explorer" }: { initialView?: "explorer" | "overview" } = {}) {
+  const [view, setView] = useState(initialView);
+  const [usage, setUsage] = useState<UsageBreakdown | null>(null);
   const [discovery, setDiscovery] = useState<DiscoveryResponse | null>(null);
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
   const [quality, setQuality] = useState<DataQualityResponse | null>(null);
@@ -120,7 +126,7 @@ export default function App() {
   const [busySourceId, setBusySourceId] = useState<string | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeSection, setActiveSection] = useState('observed-workload');
+  const [activeSection, setActiveSection] = useState(initialView === 'explorer' ? 'usage-explorer' : 'observed-workload');
   const [collection, setCollection] = useState<CollectionStatus | null>(null);
   const [settingAutoImport, setSettingAutoImport] = useState(false);
   const refreshInFlight = useRef<Promise<void> | null>(null);
@@ -137,9 +143,9 @@ export default function App() {
       do {
         refreshAgain.current = false;
         const requests = [
-          getDiscovery(), getDashboard(), getDataQuality(), getCollectionStatus(),
+          getDiscovery(), getDashboard(), getDataQuality(), getCollectionStatus(), getUsageBreakdown(),
         ] as const;
-        const [nextDiscovery, nextDashboard, nextQuality, nextCollection] = await Promise.all(requests)
+        const [nextDiscovery, nextDashboard, nextQuality, nextCollection, nextUsage] = await Promise.all(requests)
           .catch(async (cause: unknown) => {
             await Promise.allSettled(requests);
             throw cause;
@@ -150,6 +156,7 @@ export default function App() {
         setDashboard(nextDashboard);
         setQuality(nextQuality);
         setCollection(nextCollection);
+        setUsage(nextUsage);
       } while (refreshAgain.current);
     })();
     refreshInFlight.current = operation;
@@ -193,15 +200,16 @@ export default function App() {
     return () => { active = false; window.clearInterval(timer); };
   }, [refresh, busySourceId, rebuilding, refreshing, settingAutoImport]);
 
-  async function handleAutoImport(enabled: boolean) {
+  async function handleAutoImport(provider: ProviderSummary, enabled: boolean) {
     setError(null);
     setStatus(null);
     setSettingAutoImport(true);
     try {
-      const result = await setCodexAutoImport(enabled);
+      const result = await setProviderAutoImport(provider.provider!, enabled);
       await refresh();
       setCollection(result);
-      setStatus(enabled ? 'Automatic collection is enabled for existing and new Codex sessions.' : 'New Codex sessions will need approval. Previously approved sessions keep updating automatically.');
+      const name = provider.provider === 'codex' ? 'Codex' : provider.display_name;
+      setStatus(enabled ? `Automatic collection is enabled for existing and new ${name} sessions.` : `New ${name} sessions will need approval. Previously approved sessions keep updating automatically.`);
     } catch (cause: unknown) {
       setError(describeError(cause));
     } finally {
@@ -289,11 +297,12 @@ export default function App() {
         <div className="sidebar__label">Your workspace</div>
         <nav className="sidebar__nav" aria-label="Dashboard sections">
           {([
+            ['usage-explorer', 'layers', 'Usage explorer'],
             ['observed-workload', 'overview', 'Overview'],
             ['local-sources', 'sources', 'Local sources'],
             ['data-quality', 'quality', 'Data quality'],
           ] as const).map(([id, icon, label]) => (
-            <a key={id} href={`#${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={() => setActiveSection(id)}>
+            <a key={id} href={`#${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={() => { setActiveSection(id); if (id === "usage-explorer") setView("explorer"); if (id === "observed-workload") setView("overview"); }}>
               <Icon name={icon} /><span>{label}</span>
             </a>
           ))}
@@ -302,20 +311,20 @@ export default function App() {
           <Icon name="shield" />
           <strong>Private by default</strong>
           <p>Your data stays on this device. No accounts. No cloud sync.</p>
-          <a href="#privacy-note">How your data is handled</a>
+          <a href="#privacy-note" onClick={() => { setView("overview"); setActiveSection("observed-workload"); }}>How your data is handled</a>
         </div>
         <div className="sidebar__footer"><span className="status-dot" />Local workspace</div>
       </aside>
 
       <main className="app__main" id="main-content" tabIndex={-1}>
         <div className="topbar">
-          <span className="breadcrumb">Workspace <span>/</span> <strong>Overview</strong></span>
+          <span className="breadcrumb">Workspace <span>/</span> <strong>{view === "explorer" ? "Usage explorer" : "Overview"}</strong></span>
           <span className="device-pill"><Icon name="device" />On this device</span>
         </div>
         <header className="app__header">
           <div>
-            <h1>Your usage, in focus.</h1>
-            <p className="app__tagline">A clear view of your coding agents. Everything stays on this machine.</p>
+            <h1>{view === "explorer" ? "Your token hub." : "Your usage, in focus."}</h1>
+            <p className="app__tagline">Token usage across your agents, models, and sessions.</p>
             {collection ? <p className="sync-status"><span className="status-dot" />Auto sync every {collection.scan_interval_seconds} seconds{collection.last_scan_at ? ` · Last checked ${formatTimestamp(collection.last_scan_at)}` : ''}</p> : null}
           </div>
           <button type="button" className="button button--secondary" onClick={handleRefresh} disabled={actionsDisabled} aria-busy={refreshing}>
@@ -333,7 +342,9 @@ export default function App() {
           </div>
         ) : null}
 
-        {dashboard !== null ? (
+        {view === "explorer" && usage !== null ? <UsageExplorer data={usage} /> : null}
+
+        {view === "overview" && dashboard !== null ? (
           <section className="panel overview-panel" id="observed-workload" aria-labelledby="observed-workload-heading">
             <div className="section-heading">
               <h2 id="observed-workload-heading">Observed workload</h2>
@@ -377,10 +388,10 @@ export default function App() {
             </div>
             <div className="provider-grid">
               {providers.map((provider) => (
-                <ProviderCard key={provider.connector_id} provider={provider} busySourceId={busySourceId} actionsDisabled={actionsDisabled} onApprove={handleApprove} onRescan={handleRescan} autoImportEnabled={collection?.codex_auto_import} onAutoImportChange={handleAutoImport} />
+                <ProviderCard key={provider.connector_id} provider={provider} busySourceId={busySourceId} actionsDisabled={actionsDisabled} onApprove={handleApprove} onRescan={handleRescan} autoImportEnabled={collection?.auto_import_connectors?.includes(provider.connector_id) ?? (provider.provider === 'codex' && collection?.codex_auto_import)} onAutoImportChange={provider.provider ? (enabled) => handleAutoImport(provider, enabled) : undefined} />
               ))}
             </div>
-            <p className="source-disclaimer"><Icon name="info" />Codex supports usage imports. Claude Code and Hermes are detection-only for now.</p>
+            <p className="source-disclaimer"><Icon name="info" />Codex, Claude Code, and Hermes Agent support local usage imports from approved sources.</p>
           </section>
         ) : null}
 

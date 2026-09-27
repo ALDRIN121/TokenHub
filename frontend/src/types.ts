@@ -80,6 +80,41 @@ export interface DataQualityResponse {
 export interface CollectionStatus {
   scan_interval_seconds: number;
   codex_auto_import: boolean;
+  auto_import_connectors?: string[];
   last_scan_at: string | null;
   failed_source_count: number;
+}
+
+export interface UsageTotals {
+  workload_tokens: number | null;
+  input_total_tokens: number | null;
+  output_total_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  reasoning_tokens: number | null;
+  event_count: number;
+  session_count: number;
+  model_count: number;
+  incomplete_event_count: number;
+  first_seen: string | null;
+  last_seen: string | null;
+}
+
+export interface ModelUsage extends UsageTotals {
+  provider: string;
+  model_name: string | null;
+  attribution: string;
+}
+
+export interface SessionUsage extends UsageTotals {
+  provider: string;
+  session_key: string;
+  models: (UsageTotals & { model_name: string | null })[];
+}
+
+export interface UsageBreakdown {
+  totals: UsageTotals;
+  providers: (UsageTotals & { provider: string })[];
+  models: ModelUsage[];
+  sessions: SessionUsage[];
 }

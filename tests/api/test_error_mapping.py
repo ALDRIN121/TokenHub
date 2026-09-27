@@ -63,8 +63,13 @@ def test_unknown_source_id_maps_to_404_without_echoing_the_id(
 
 
 @pytest.mark.parametrize("action", ["approve", "rescan"])
-def test_discovery_only_provider_maps_to_422(client: TestClient, action: str) -> None:
+def test_invalid_source_format_maps_to_422(client: TestClient, action: str) -> None:
     source_id = discovery_source_id(client, "hermes-local")
+    from sqlalchemy import text
+
+    session = client.app.state.container.services.session
+    with session.begin():
+        session.execute(text("UPDATE sources SET parser_version='unknown' WHERE source_id=:source_id"), {"source_id": source_id})
     response = client.post(f"/api/v1/sources/{source_id}/{action}", headers=ORIGIN)
     assert response.status_code == 422
     assert response.json() == {"detail": "Source is not supported"}
@@ -125,7 +130,7 @@ def test_no_body_echoes_paths_columns_records_or_forwarded_host(
         client.get("/api/v1/data-quality"),
     ]
     assert [response.status_code for response in responses] == [
-        404, 404, 422, 422, 409, 200, 200, 200, 200, 200,
+        404, 404, 200, 400, 409, 200, 200, 200, 200, 200,
     ]
 
     forbidden = (

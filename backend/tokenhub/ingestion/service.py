@@ -23,7 +23,7 @@ class SourceNotApprovedError(ValueError):
 
 
 class UnsupportedSourceError(ValueError):
-    """This milestone cannot scan the selected source."""
+    """The selected connector cannot scan this source format."""
 
 
 class IngestionService:
@@ -85,6 +85,7 @@ class IngestionService:
             state=result.state,
             partial_final_record=result.partial_final_record,
             unsupported_records=result.unsupported_records,
+            replace_events=result.replace_events,
             record_import=(
                 record_unchanged or result.cursor != cursor
                 or result.state.value != source.state
@@ -114,12 +115,6 @@ class IngestionService:
             raise SourceNotFoundError("source has not been discovered") from error
 
     def _supported_connector(self, source: SourceRecord) -> UsageConnector:
-        # Other providers remain presence-only even if their metadata claims scan support.
-        if (
-            source.connector_id != "codex-local"
-            or source.provider != Provider.CODEX.value
-        ):
-            raise UnsupportedSourceError("source is discovery-only")
         connector = next(
             (
                 item
@@ -132,7 +127,8 @@ class IngestionService:
             raise UnsupportedSourceError("source connector is unavailable")
         capabilities = connector.capabilities()
         if (
-            not source.scan_supported
+            source.provider != getattr(connector, "provider", None)
+            or not source.scan_supported
             or not capabilities.scan_supported
             or source.source_type != capabilities.source_type
             or source.parser_version != capabilities.parser_version

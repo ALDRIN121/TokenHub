@@ -159,7 +159,8 @@ def _read_guard(watched: dict[str, Path]) -> Iterator[list[str]]:
         return real_read_text(self, *args, **kwargs)
 
     def guarded_os_open(path: object, flags: int, *args: object, **kwargs: object):
-        _record(path)
+        if not flags & os.O_DIRECTORY:
+            _record(path)
         return real_os_open(path, flags, *args, **kwargs)
 
     def guarded_zipfile(file: object, *args: object, **kwargs: object):
@@ -211,11 +212,11 @@ def test_claude_and_hermes_are_never_opened_during_discovery(tmp_path: Path) -> 
             for provider in discovery.json()["providers"]
         }
         assert providers["claude-code-local"]["state"] == "discovered"
-        assert providers["hermes-local"]["state"] == "unsupported"
+        assert providers["hermes-local"]["state"] == "discovered"
         hermes_sources = providers["hermes-local"]["sources"]
         assert hermes_sources
         assert hermes_sources[0]["source_type"] == "sqlite"
-        assert hermes_sources[0]["scan_supported"] is False
+        assert hermes_sources[0]["scan_supported"] is True
         # Presence is reported; contents, names, and paths are not.
         assert str(tmp_path) not in discovery.text
         assert "SQLite format 3" not in discovery.text
@@ -295,16 +296,22 @@ def test_hermes_state_database_is_never_unpacked_or_surfaced(tmp_path: Path) -> 
             assert SYNTHETIC_CODEX_SECRET not in response.text
             assert str(tmp_path) not in response.text
 
-        # The presence-only source is refused for any scan; nothing is read.
+        # An unapproved database cannot be read, even when disguised as an archive.
         hermes_id = next(
             provider["sources"][0]["source_id"]
             for provider in discovery.json()["providers"]
             if provider["connector_id"] == "hermes-local"
         )
-        for action in ("approve", "rescan"):
-            with _read_guard(watched) as reads:
-                response = client.post(
-                    f"/api/v1/sources/{hermes_id}/{action}", headers=ORIGIN_HEADERS
-                )
-            assert response.status_code == 422
-            assert reads == []
+        with _read_guard(watched) as reads:
+            response = client.post(f"/api/v1/sources/{hermes_id}/rescan", headers=ORIGIN_HEADERS)
+        assert response.status_code == 409
+        assert reads == []
+        assert client.post(f"/api/v1/sources/{hermes_id}/approve", headers=ORIGIN_HEADERS).status_code == 200
+        with (
+            patch.object(zipfile, "ZipFile", side_effect=AssertionError("must not unpack archives")),
+            patch.object(tarfile, "open", side_effect=AssertionError("must not unpack archives")),
+        ):
+            response = client.post(f"/api/v1/sources/{hermes_id}/rescan", headers=ORIGIN_HEADERS)
+        assert response.status_code == 400
+        assert SYNTHETIC_CODEX_SECRET not in response.text
+        assert not list(tmp_path.rglob("payload.json"))

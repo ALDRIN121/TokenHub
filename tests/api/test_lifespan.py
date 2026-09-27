@@ -15,7 +15,7 @@ from tokenhub.settings import TokenHubSettings
 
 from tests.api.conftest import ORIGIN, codex_id
 
-HEAD_REVISION = "0004_auto_import_roots"
+HEAD_REVISION = "0005_usage_metadata"
 EXPECTED_TABLES = frozenset(
     {"alembic_version", "sources", "usage_events", "sync_cursors", "import_runs", "auto_import_roots"}
 )

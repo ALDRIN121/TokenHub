@@ -257,6 +257,58 @@ def test_stored_parser_upgrade_does_not_need_rediscovery(client: TestClient, tmp
         freshness = second.get('/api/v1/data-quality').json()['source_freshness'][0]
         assert freshness['state'] == 'healthy'
         services = restarted.state.container.services
-        assert services.source_repository.get(source_id).parser_version == 'codex-jsonl-v2'
-        assert services.usage_repository.current_cursor(source_id).parser_version == 'codex-jsonl-v2'
+        assert services.source_repository.get(source_id).parser_version == 'codex-jsonl-v4'
+        assert services.usage_repository.current_cursor(source_id).parser_version == 'codex-jsonl-v4'
         assert freshness['unsupported_records'] == 0
+
+
+def test_parser_upgrade_backfills_task_and_model_without_changing_tokens(
+    client: TestClient, tmp_path: Path
+) -> None:
+    import json
+
+    source = tmp_path / 'home/.codex/sessions/synthetic.jsonl'
+    context = json.dumps({'type': 'turn_context', 'payload': {'model': 'recorded-model', 'turn_id': 'turn-one'}})
+    row = json.loads(token_record(1, input_tokens=100, output_tokens=25))
+    row['payload'].update(session_id='shared-app', thread_id='task-one', turn_id='turn-one')
+    source.write_text(context + '\n' + json.dumps(row) + '\n')
+    source_id = codex_id(client)
+    client.post(f'/api/v1/sources/{source_id}/approve', headers=ORIGIN)
+    client.app.state.container.collect()
+    container = client.app.state.container
+    with container.services.session.begin():
+        container.services.session.execute(text("UPDATE usage_events SET model_name=NULL, session_id=NULL, model_attribution='unknown'"))
+        container.services.session.execute(text("UPDATE sources SET parser_version='codex-jsonl-v2'"))
+        container.services.session.execute(text("UPDATE sync_cursors SET parser_version='codex-jsonl-v2'"))
+    restarted = create_app(container.settings)
+    empty_home = tmp_path / 'empty-home'
+    empty_home.mkdir()
+    restarted.state.container.discovery_context = DiscoveryContext(empty_home, {}, lambda _: None)
+    with TestClient(restarted, base_url='http://127.0.0.1:7432') as second:
+        result = second.get('/api/v1/usage').json()
+        assert result['totals']['workload_tokens'] == 125
+        assert result['totals']['event_count'] == 1
+        assert result['totals']['session_count'] == 1
+        assert result['models'][0]['model_name'] == 'recorded-model'
+        assert container.services.source_repository.get(source_id).state == 'healthy'
+
+
+def test_usage_api_keeps_tasks_separate_with_a_shared_app_session(client: TestClient, tmp_path: Path) -> None:
+    import json
+
+    source = tmp_path / 'home/.codex/sessions/synthetic.jsonl'
+    rows = []
+    for ordinal, thread in [(1, 'task-one'), (2, 'task-two')]:
+        row = json.loads(token_record(ordinal, input_tokens=100, output_tokens=25))
+        row['payload'].update(session_id='shared-app', thread_id=thread, model='recorded-model')
+        rows.append(json.dumps(row))
+    source.write_text('\n'.join(rows) + '\n')
+    source_id = codex_id(client)
+    client.post(f'/api/v1/sources/{source_id}/approve', headers=ORIGIN)
+    client.app.state.container.collect()
+    result = client.get('/api/v1/usage').json()
+    assert result['totals']['session_count'] == 2
+    assert result['models'][0]['session_count'] == 2
+    assert result['totals']['workload_tokens'] == 250
+    assert len(result['sessions']) == 2
+    assert 'task-one' not in str(result)

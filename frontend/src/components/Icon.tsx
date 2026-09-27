@@ -1,6 +1,10 @@
 import type { CSSProperties } from 'react';
 
 const paths = {
+  sort: 'M9 8l3-3 3 3 M9 16l3 3 3-3',
+  sortAscending: 'M12 19V5 M7 10l5-5 5 5',
+  search: 'M21 21l-5-5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',
+  chevron: 'M9 5l7 7-7 7',
   overview: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
   sources: 'M8 3v5 M16 3v5 M6 8h12v4a6 6 0 0 1-12 0z M12 18v3',
   quality: 'M9 3H5v18h14V3h-4 M9 2h6v4H9z M8 11l2 2 5-5 M8 17h7',

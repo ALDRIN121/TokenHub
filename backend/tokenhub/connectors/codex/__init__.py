@@ -1,3 +1,3 @@
 """Codex local-session connector."""
 
-PARSER_VERSION = "codex-jsonl-v2"
+PARSER_VERSION = "codex-jsonl-v4"

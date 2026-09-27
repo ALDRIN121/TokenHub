@@ -61,9 +61,9 @@ export function ProviderCard({ provider, busySourceId, actionsDisabled = false, 
         {detectionFailed ? 'This installation could not be checked. Choose Refresh data to retry detection.' : supported ? 'Approved session usage updates automatically on this device.' : detected ? 'Installation detected. Usage imports are not supported yet.' : 'No installation detected on this machine.'}
       </p>
 
-      {provider.connector_id === 'codex-local' && supported && onAutoImportChange ? (
+      {supported && onAutoImportChange ? (
         <div className="provider-card__automation">
-          <p className="provider-card__note">{autoImportEnabled ? 'Existing and new Codex sessions are included automatically.' : 'Approve this session folder once to automatically include new Codex sessions.'}</p>
+          <p className="provider-card__note">{autoImportEnabled ? `Existing and new ${provider.display_name} sessions are included automatically.` : `Approve the local usage source once to automatically include new ${provider.display_name} sessions.`}</p>
           <button type="button" className="button button--secondary" disabled={actionsDisabled} onClick={() => onAutoImportChange(!autoImportEnabled)}>
             <Icon name="refresh" />{autoImportEnabled ? 'Stop including new sessions' : 'Include new sessions automatically'}
           </button>

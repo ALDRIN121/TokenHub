@@ -68,8 +68,8 @@ def test_nullable_metrics_and_quality_are_serialized(client: TestClient, tmp_pat
 def test_service_errors_are_safe(client: TestClient, tmp_path: Path) -> None:
     discovery = client.get("/api/v1/discovery").json()
     hermes = discovery["providers"][2]["sources"][0]["source_id"]
-    for action in ("approve", "rescan"):
-        assert client.post(f"/api/v1/sources/{hermes}/{action}", headers=ORIGIN).status_code == 422
+    for action, status in (("approve", 200), ("rescan", 400)):
+        assert client.post(f"/api/v1/sources/{hermes}/{action}", headers=ORIGIN).status_code == status
         missing = client.post(f"/api/v1/sources/sk-secret/{action}", headers=ORIGIN)
         assert missing.status_code == 404
         assert "sk-secret" not in missing.text
@@ -93,7 +93,7 @@ def test_lifespan_migrates_and_restart_recovers_approval(client: TestClient, api
     source_id = codex_id(client)
     assert client.post(f"/api/v1/sources/{source_id}/approve", headers=ORIGIN).status_code == 200
     with sqlite3.connect(tmp_path / "data" / "tokenhub.sqlite3") as database:
-        assert database.execute("SELECT version_num FROM alembic_version").fetchone() == ("0004_auto_import_roots",)
+        assert database.execute("SELECT version_num FROM alembic_version").fetchone() == ("0005_usage_metadata",)
     restarted = create_app(api_app.state.container.settings)
     with TestClient(restarted, base_url="http://127.0.0.1:7432") as second:
         assert second.post(f"/api/v1/sources/{source_id}/rescan", headers=ORIGIN).json()["inserted_events"] == 0

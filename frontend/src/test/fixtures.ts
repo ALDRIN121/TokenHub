@@ -19,7 +19,7 @@ export const discoveryFixture: DiscoveryResponse = {
       // Two independent signals → high (see confidence_from_evidence in the backend).
       confidence: 'high',
       evidence_codes: ['known_root_exists', 'configuration_found'],
-      // The Claude Code connector is presence-only: it never reports a source.
+      // This baseline has no Claude session files; import-capable variants are tested separately.
       sources: [],
     },
     {
@@ -48,6 +48,7 @@ export const discoveryFixture: DiscoveryResponse = {
       connector_id: 'hermes-local',
       display_name: 'Hermes Agent',
       provider: 'hermes',
+      // Exercise compatibility with a discovery-only response from an older server.
       state: 'unsupported',
       confidence: 'high',
       evidence_codes: ['known_root_exists', 'state_database_found'],
@@ -119,4 +120,18 @@ export const importOutcomeFixture = {
   duplicate_events: 1,
   partial_final_record: true,
   unsupported_records: 0,
+};
+
+const usageTotals = {
+  workload_tokens: 125, input_total_tokens: 100, output_total_tokens: 25,
+  cache_read_tokens: 40, cache_write_tokens: 10, reasoning_tokens: 8,
+  event_count: 12, session_count: 1, model_count: 1, incomplete_event_count: 0,
+  first_seen: '2026-09-20T12:00:00Z', last_seen: '2026-09-20T12:00:00Z',
+};
+
+export const usageFixture: import('../types').UsageBreakdown = {
+  totals: usageTotals,
+  providers: [{ ...usageTotals, provider: 'codex' }],
+  models: [{ ...usageTotals, provider: 'codex', model_name: 'gpt-test', attribution: 'turn' }],
+  sessions: [{ ...usageTotals, provider: 'codex', session_key: 'opaque-session-one', models: [{ ...usageTotals, model_name: 'gpt-test' }] }],
 };

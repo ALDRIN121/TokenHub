@@ -153,24 +153,33 @@ def collection_status(request: Request) -> dict[str, object]:
         return container.services.collection.status(container.settings.scan_interval_seconds)
 
 
-@router.post("/collection/codex/enable")
-def enable_codex_collection(request: Request) -> dict[str, object]:
+def _collection_connector(provider: str) -> str:
+    connectors = {"codex": "codex-local", "claude_code": "claude-code-local", "hermes": "hermes-local"}
+    if provider not in connectors:
+        raise HTTPException(status_code=422, detail="Source is not supported")
+    return connectors[provider]
+
+
+@router.post("/collection/{provider}/enable")
+def enable_provider_collection(provider: str, request: Request) -> dict[str, object]:
     """Explicitly include existing and future sources under the discovered root."""
     container = container_for(request)
+    connector_id = _collection_connector(provider)
     with container.lock:
         try:
-            container.services.collection.enable_codex()
+            container.services.collection.enable(connector_id)
         except Exception as error:
             raise _service_failure(error) from error
         return container.services.collection.status(container.settings.scan_interval_seconds)
 
 
-@router.post("/collection/codex/disable")
-def disable_codex_collection(request: Request) -> dict[str, object]:
+@router.post("/collection/{provider}/disable")
+def disable_provider_collection(provider: str, request: Request) -> dict[str, object]:
     """Stop automatically approving new sources; existing approvals remain."""
     container = container_for(request)
+    connector_id = _collection_connector(provider)
     with container.lock:
-        container.services.source_repository.disable_auto_import("codex-local")
+        container.services.source_repository.disable_auto_import(connector_id)
         return container.services.collection.status(container.settings.scan_interval_seconds)
 
 
@@ -232,3 +241,11 @@ def data_quality(request: Request) -> dict[str, object]:
         "quality_counts": _quality_payload(summary),
         "source_freshness": _freshness_payload(summary),
     }
+
+
+@router.get("/usage")
+def usage(request: Request) -> dict[str, object]:
+    """Path-free usage grouped by agent, recorded model, and opaque session."""
+    container = container_for(request)
+    with container.lock:
+        return container.services.analytics.usage_breakdown()

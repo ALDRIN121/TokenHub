@@ -47,6 +47,9 @@ class UsageEventRecord(Base):
     measurement_type: Mapped[str] = mapped_column(String, nullable=False)
     quality: Mapped[str] = mapped_column(String, nullable=False)
     parser_version: Mapped[str] = mapped_column(String, nullable=False)
+    model_name: Mapped[str | None] = mapped_column(String)
+    session_id: Mapped[str | None] = mapped_column(String)
+    model_attribution: Mapped[str] = mapped_column(String, nullable=False, default="unknown")
 
 
 class AutoImportRootRecord(Base):

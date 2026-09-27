@@ -6,6 +6,7 @@ import type {
   DiscoveryResponse,
   ImportOutcome,
   RebuildOutcome,
+  UsageBreakdown,
 } from '../types';
 
 /**
@@ -54,8 +55,8 @@ export function getCollectionStatus(): Promise<CollectionStatus> {
   return request<CollectionStatus>('/collection');
 }
 
-export function setCodexAutoImport(enabled: boolean): Promise<CollectionStatus> {
-  return request<CollectionStatus>(`/collection/codex/${enabled ? 'enable' : 'disable'}`, { method: 'POST' });
+export function setProviderAutoImport(provider: string, enabled: boolean): Promise<CollectionStatus> {
+  return request<CollectionStatus>(`/collection/${encodeURIComponent(provider)}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' });
 }
 
 export function approveSource(sourceId: string): Promise<ApprovalResult> {
@@ -72,4 +73,8 @@ export function rescanSource(sourceId: string): Promise<ImportOutcome> {
 
 export function rebuildIndex(): Promise<RebuildOutcome> {
   return request<RebuildOutcome>('/rebuild', { method: 'POST' });
+}
+
+export function getUsageBreakdown(): Promise<UsageBreakdown> {
+  return request<UsageBreakdown>('/usage');
 }

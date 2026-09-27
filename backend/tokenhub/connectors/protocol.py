@@ -74,6 +74,7 @@ class ScanResult:
     reason_code: str | None = None
     partial_final_record: bool = False
     unsupported_records: int = 0
+    replace_events: bool = False
 
 
 class UsageConnector(Protocol):

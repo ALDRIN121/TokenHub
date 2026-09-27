@@ -3,12 +3,14 @@
 from datetime import UTC
 from typing import Any, cast
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
+from tokenhub.connectors.claude import PARSER_VERSION as CLAUDE_PARSER_VERSION
 from tokenhub.connectors.codex import PARSER_VERSION
+from tokenhub.connectors.hermes import PARSER_VERSION as HERMES_PARSER_VERSION
 from tokenhub.database.models import (
     AutoImportRootRecord,
     ImportRunRecord,
@@ -21,6 +23,7 @@ from tokenhub.domain.models import (
     DashboardSummary,
     ImportOutcome,
     MeasurementType,
+    Provider,
     Quality,
     SourceDescriptor,
     SourceFreshness,
@@ -72,7 +75,11 @@ class SourceRepository:
                             key: value
                             for key, value in values.items()
                             if key not in {"source_id", "state"}
-                        },
+                        } | {"state": case(
+                            (SourceRecord.state == SourceState.UNSUPPORTED.value,
+                             candidate.state.value),
+                            else_=SourceRecord.state,
+                        )},
                     )
                 )
                 source = self._source(candidate.source_id)
@@ -155,30 +162,41 @@ class SourceRepository:
             self._source(source_id).state = state.value
 
     def upgrade_codex_parser_versions(self) -> None:
-        """Update known old metadata while preserving durable approval identities."""
+        """Upgrade known parsers without altering approvals, counts, or cursors.
+
+        Old cursors force a reparse on collection; existing Codex rows receive
+        metadata only, while the snapshot parsers reconcile their source rows.
+        """
+        upgrades = [
+            ("codex-local", "codex", "jsonl", ["codex-jsonl-v1", "codex-jsonl-v2", "codex-jsonl-v3"], PARSER_VERSION),
+            ("claude-code-local", "claude_code", "jsonl", ["claude-jsonl-v1"], CLAUDE_PARSER_VERSION),
+            ("hermes-local", "hermes", "sqlite", ["hermes-sqlite-v1"], HERMES_PARSER_VERSION),
+        ]
         with self.session.begin():
-            self.session.execute(
-                update(SourceRecord)
-                .where(
-                    SourceRecord.connector_id == "codex-local",
-                    SourceRecord.provider == "codex",
-                    SourceRecord.source_type == "jsonl",
-                    SourceRecord.scan_supported.is_(True),
-                    SourceRecord.parser_version == "codex-jsonl-v1",
+            for connector, provider, source_type, previous, current in upgrades:
+                self.session.execute(
+                    update(SourceRecord).where(
+                        SourceRecord.connector_id == connector,
+                        SourceRecord.provider == provider,
+                        SourceRecord.source_type == source_type,
+                        SourceRecord.scan_supported.is_(True),
+                        SourceRecord.parser_version.in_(previous),
+                    ).values(parser_version=current)
                 )
-                .values(parser_version=PARSER_VERSION)
-            )
 
     def enable_auto_import(self, candidate: SourceDescriptor) -> None:
-        """Grant only a discovered Codex root, pinned to its filesystem identity."""
+        """Grant a supported provider root, pinned to its filesystem identity."""
         if (
-            candidate.connector_id != "codex-local"
-            or candidate.provider.value != "codex"
+            (candidate.connector_id, candidate.provider.value) not in {
+                ("codex-local", "codex"),
+                ("claude-code-local", "claude_code"),
+                ("hermes-local", "hermes"),
+            }
             or not candidate.scan_supported
             or candidate.approved_root_device is None
             or candidate.approved_root_inode is None
         ):
-            raise ValueError("automatic imports require a supported Codex source")
+            raise ValueError("automatic imports require a supported provider source")
         validate_source_path(
             candidate.canonical_path,
             candidate.approved_root,
@@ -228,11 +246,18 @@ class UsageRepository:
         partial_final_record: bool = False,
         unsupported_records: int = 0,
         record_import: bool = True,
+        replace_events: bool = False,
     ) -> ImportOutcome:
         if any(event.source_id != cursor.source_id for event in events):
             raise ValueError("scan events and cursor must belong to the same source")
         inserted_events = 0
         with self.session.begin():
+            if replace_events:
+                self.session.execute(
+                    delete(UsageEventRecord).where(
+                        UsageEventRecord.source_id == cursor.source_id
+                    )
+                )
             for usage_event in events:
                 result = self.session.execute(
                     insert(UsageEventRecord)
@@ -250,12 +275,30 @@ class UsageRepository:
                         measurement_type=usage_event.measurement_type.value,
                         quality=usage_event.quality.value,
                         parser_version=usage_event.parser_version,
+                        model_name=usage_event.model_name,
+                        session_id=usage_event.session_id,
+                        model_attribution=usage_event.model_attribution,
                     )
                     .on_conflict_do_nothing(
                         index_elements=["source_id", "record_identity"]
                     )
                 )
-                inserted_events += cast(CursorResult[Any], result).rowcount
+                inserted = cast(CursorResult[Any], result).rowcount
+                inserted_events += inserted
+                if not inserted:
+                    # Reparse enriches historical rows without revising their
+                    # token counts or reporting a duplicate as a new event.
+                    self.session.execute(
+                        update(UsageEventRecord).where(
+                            UsageEventRecord.source_id == usage_event.source_id,
+                            UsageEventRecord.record_identity == usage_event.record_identity,
+                        ).values(
+                            model_name=usage_event.model_name,
+                            session_id=usage_event.session_id,
+                            model_attribution=usage_event.model_attribution,
+                            parser_version=usage_event.parser_version,
+                        )
+                    )
             self.session.execute(
                 insert(SyncCursorRecord)
                 .values(
@@ -323,10 +366,48 @@ class UsageRepository:
             self.session.execute(delete(UsageEventRecord))
             self.session.execute(delete(SyncCursorRecord))
 
+    @staticmethod
+    def _canonical_deltas() -> tuple[Any, Any]:
+        records = UsageEventRecord
+        ranked = select(
+            records,
+            func.row_number().over(
+                partition_by=(records.connector_id, records.record_identity),
+                order_by=(
+                    case((
+                        records.input_total_tokens.is_not(None)
+                        & records.output_total_tokens.is_not(None), 1,
+                    ), else_=0).desc(),
+                    (func.coalesce(records.input_total_tokens, 0)
+                     + func.coalesce(records.output_total_tokens, 0)).desc(),
+                    case((records.model_name.is_not(None), 1), else_=0).desc(),
+                    records.timestamp.desc(), records.source_id,
+                ),
+            ).label("message_rank"),
+        ).where(records.measurement_type == MeasurementType.DELTA.value).subquery()
+        events = aliased(UsageEventRecord, ranked)
+        delta = or_(
+            events.provider != Provider.CLAUDE_CODE.value,
+            ranked.c.message_rank == 1,
+        )
+        return events, delta
+
+    def observed_events(self) -> list[UsageEventRecord]:
+        """Detached canonical observations shared with the overview totals."""
+        events, delta = self._canonical_deltas()
+        with self.session.begin():
+            rows = list(self.session.scalars(select(events).where(delta)))
+            for row in rows:
+                self.session.expunge(row)
+            return rows
+
     def dashboard_totals(self) -> DashboardSummary:
         """Sum observed delta values, preserving SQL NULL for unknown/no data."""
-        events = UsageEventRecord
-        delta = events.measurement_type == MeasurementType.DELTA.value
+        records = UsageEventRecord
+        # Claude can copy conversation history into another session file. Keep
+        # each source's provenance but count one complete observation per API
+        # message, preferring the largest usage over earlier streaming chunks.
+        events, delta = self._canonical_deltas()
         with self.session.begin():
             totals = self.session.execute(
                 select(
@@ -348,11 +429,11 @@ class UsageRepository:
                 quality_counts[Quality(quality)] = count
             latest_events = (
                 select(
-                    events.source_id,
-                    func.max(events.timestamp).label("latest_event_at"),
+                    records.source_id,
+                    func.max(records.timestamp).label("latest_event_at"),
                 )
-                .where(delta)
-                .group_by(events.source_id)
+                .where(records.measurement_type == MeasurementType.DELTA.value)
+                .group_by(records.source_id)
                 .subquery()
             )
             freshness = tuple(

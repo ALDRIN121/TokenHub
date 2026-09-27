@@ -101,6 +101,9 @@ class UsageEvent:
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
     reasoning_tokens: int | None = None
+    model_name: str | None = None
+    session_id: str | None = None
+    model_attribution: str = "unknown"
 
     @property
     def workload_tokens(self) -> int | None:

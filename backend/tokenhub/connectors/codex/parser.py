@@ -3,11 +3,12 @@
 import hashlib
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from tokenhub.connectors.codex import PARSER_VERSION
+from tokenhub.connectors.metadata import usage_identifier
 from tokenhub.domain.models import (
     MeasurementType,
     Quality,
@@ -27,6 +28,34 @@ _NON_USAGE_EVENT_TYPES = frozenset({
     "turn_aborted", "thread_goal_updated", "user_message", "agent_message",
     "agent_reasoning", "agent_reasoning_raw_content", "context_compacted",
 })
+
+
+@dataclass(slots=True)
+class _ModelContext:
+    session_id: str | None = None
+    current_model: str | None = None
+    turns: dict[str, str | None] = field(default_factory=dict)
+
+    def observe(self, record: Any) -> None:
+        if not isinstance(record, dict) or not isinstance(record.get("payload"), dict):
+            return
+        payload = record["payload"]
+        if record.get("type") == "session_meta":
+            self.session_id = usage_identifier(payload.get("id") or payload.get("session_id"))
+        elif record.get("type") == "turn_context":
+            self.current_model = usage_identifier(payload.get("model"))
+            turn = usage_identifier(payload.get("turn_id"))
+            if turn:
+                self.turns[turn] = self.current_model
+
+    def model_for(self, payload: dict[str, Any]) -> str | None:
+        explicit = usage_identifier(payload.get("model"))
+        if explicit:
+            return explicit
+        turn = usage_identifier(payload.get("turn_id"))
+        if turn and self.turns:
+            return self.turns.get(turn)
+        return self.current_model
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +80,7 @@ def parse_codex_jsonl(
     if start_offset < 0:
         raise ValueError("start offset must be nonnegative")
     events: list[UsageEvent] = []
+    context = _ModelContext()
     safe_byte_offset = start_offset
     unsupported_records = 0
     partial_final_record = False
@@ -66,11 +96,15 @@ def parse_codex_jsonl(
         elif start_offset > 0:
             remaining = start_offset
             while remaining:
-                chunk = session_file.read(min(remaining, 1024 * 1024))
+                chunk = session_file.readline(remaining)
                 if not chunk:
                     break
                 prefix_hasher.update(chunk)
                 remaining -= len(chunk)
+                try:
+                    context.observe(json.loads(chunk))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    pass
             if remaining or (
                 expected_prefix_fingerprint is not None
                 and prefix_hasher.hexdigest() != expected_prefix_fingerprint
@@ -78,6 +112,7 @@ def parse_codex_jsonl(
                 start_offset = 0
                 safe_byte_offset = 0
                 prefix_hasher = hashlib.sha256()
+                context = _ModelContext()
                 full_reparse = True
         session_file.seek(start_offset)
         while raw_line := session_file.readline():
@@ -92,9 +127,10 @@ def parse_codex_jsonl(
             except (UnicodeDecodeError, json.JSONDecodeError):
                 unsupported_records += 1
                 continue
+            context.observe(record)
             if _is_non_usage_record(record):
                 continue
-            event = _parse_usage_record(record, source)
+            event = _parse_usage_record(record, source, context)
             if event is None:
                 unsupported_records += 1
             else:
@@ -112,7 +148,7 @@ def parse_codex_jsonl(
 
 
 def _parse_usage_record(
-    record: Any, source: SourceDescriptor
+    record: Any, source: SourceDescriptor, context: _ModelContext
 ) -> UsageEvent | None:
     if not isinstance(record, dict) or record.get("type") != "token_usage_record":
         return None
@@ -157,6 +193,10 @@ def _parse_usage_record(
         measurement_type=MeasurementType.DELTA,
         quality=Quality.EXACT,
         parser_version=PARSER_VERSION,
+        model_name=context.model_for(payload),
+        session_id=(usage_identifier(payload.get("thread_id")) or context.session_id
+                    or usage_identifier(payload.get("session_id"))),
+        model_attribution=("turn" if context.model_for(payload) else "unknown"),
     )
 
 

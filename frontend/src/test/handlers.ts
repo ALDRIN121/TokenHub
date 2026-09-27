@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw';
 
 import {
   dashboardFixture,
+  usageFixture,
   dataQualityFixture,
   discoveryFixture,
   importOutcomeFixture,
@@ -23,12 +24,14 @@ function refusesWithoutOrigin(request: Request): Response | null {
 
 export const handlers = [
   http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: false, last_scan_at: null, failed_source_count: 0 })),
-  http.post('/api/v1/collection/codex/:action', ({ request, params }) => {
+  http.post('/api/v1/collection/:provider/:action', ({ request, params }) => {
     const refusal = refusesWithoutOrigin(request);
     if (refusal !== null) return refusal;
-    return HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: params.action === 'enable', last_scan_at: null, failed_source_count: 0 });
+    const connectors: Record<string, string> = { codex: 'codex-local', claude_code: 'claude-code-local', hermes: 'hermes-local' };
+    return HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: params.provider === 'codex' && params.action === 'enable', auto_import_connectors: params.action === 'enable' ? [connectors[String(params.provider)]] : [], last_scan_at: null, failed_source_count: 0 });
   }),
   http.get('/api/v1/discovery', () => HttpResponse.json(discoveryFixture)),
+  http.get('/api/v1/usage', () => HttpResponse.json(usageFixture)),
   http.get('/api/v1/dashboard', () => HttpResponse.json(dashboardFixture)),
   http.get('/api/v1/data-quality', () => HttpResponse.json(dataQualityFixture)),
 

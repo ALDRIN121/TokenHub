@@ -186,7 +186,7 @@ def test_parser_leaves_missing_breakdowns_unknown() -> None:
     assert event.cache_write_tokens is None
     assert event.reasoning_tokens is None
     assert event.quality is Quality.EXACT
-    assert event.parser_version == "codex-jsonl-v2"
+    assert event.parser_version == "codex-jsonl-v4"
 
 
 def test_parser_starts_at_the_provided_completed_line_offset() -> None:
@@ -431,3 +431,43 @@ def test_parser_rejects_approved_root_ancestor_swapped_during_open(
     with pytest.raises(ValueError, match="approved source cannot be opened safely"):
         parse_codex_jsonl(source, start_offset=0)
     assert swapped is True
+
+
+def test_model_context_survives_incremental_scans_and_model_switches(tmp_path: Path) -> None:
+    from tests.service_support import token_record
+
+    path = tmp_path / "models.jsonl"
+    context = lambda model, turn: json.dumps({"type": "turn_context", "payload": {"model": model, "turn_id": turn}}).encode() + b"\n"
+    usage = json.loads(token_record(1, input_tokens=100, output_tokens=25))
+    usage["payload"].update(session_id="synthetic-session", turn_id="turn-one")
+    path.write_bytes(context("model-one", "turn-one") + json.dumps(usage).encode() + b"\n")
+    source = replace(synthetic_source("normal.jsonl"), canonical_path=path, approved_root=tmp_path)
+    first = parse_codex_jsonl(source, 0)
+    assert first.events[0].model_name == "model-one"
+    assert first.events[0].session_id == "synthetic-session"
+    usage["ordinal"] = 2
+    with path.open("ab") as stream:
+        stream.write(context("model-two", "turn-two"))
+        # A late record still belongs to the first turn.
+        stream.write(json.dumps(usage).encode() + b"\n")
+        usage["ordinal"] = 3
+        usage["payload"]["turn_id"] = "turn-two"
+        stream.write(json.dumps(usage).encode() + b"\n")
+    second = parse_codex_jsonl(source, first.safe_byte_offset, first.safe_prefix_fingerprint)
+    assert [event.model_name for event in second.events] == ["model-one", "model-two"]
+    assert all(event.model_attribution == "turn" for event in second.events)
+
+
+def test_codex_tasks_are_separate_even_with_a_shared_app_session(tmp_path: Path) -> None:
+    from tests.service_support import token_record
+
+    path = tmp_path / 'tasks.jsonl'
+    rows = []
+    for ordinal, thread in [(1, 'task-one'), (2, 'task-two')]:
+        row = json.loads(token_record(ordinal, input_tokens=100, output_tokens=25))
+        row['payload'].update(session_id='shared-app-session', thread_id=thread)
+        rows.append(json.dumps(row))
+    path.write_text('\n'.join(rows) + '\n')
+    source = replace(synthetic_source('normal.jsonl'), canonical_path=path, approved_root=tmp_path)
+    result = parse_codex_jsonl(source, 0)
+    assert {event.session_id for event in result.events} == {'task-one', 'task-two'}

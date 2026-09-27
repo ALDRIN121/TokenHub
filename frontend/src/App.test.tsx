@@ -19,7 +19,7 @@ describe('TokenHub client', () => {
     let finish!: () => void;
     let failedResponse = false;
     const pending = new Promise<void>((resolve) => { finish = resolve; });
-    const view = render(<App />);
+    const view = render(<App initialView="overview" />);
     let polling: Promise<void> | undefined;
     try {
       await screen.findByText('125');
@@ -38,7 +38,7 @@ describe('TokenHub client', () => {
       polling = (call[0] as () => Promise<void>)();
       await waitFor(() => expect(failedResponse).toBe(true));
       await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh data' }));
-      expect(fetches.mock.calls.length - initialCalls).toBe(4);
+      expect(fetches.mock.calls.length - initialCalls).toBe(5);
     } finally {
       finish();
       await act(async () => { await polling; });
@@ -53,7 +53,7 @@ describe('TokenHub client', () => {
     const fetches = vi.spyOn(globalThis, 'fetch');
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => { finish = resolve; });
-    const view = render(<App />);
+    const view = render(<App initialView="overview" />);
     let polling: Promise<void> | undefined;
     try {
       await screen.findByText('125');
@@ -65,7 +65,7 @@ describe('TokenHub client', () => {
       const initialCalls = fetches.mock.calls.length;
       polling = (call[0] as () => Promise<void>)();
       await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh data' }));
-      expect(fetches.mock.calls.length - initialCalls).toBe(4);
+      expect(fetches.mock.calls.length - initialCalls).toBe(5);
     } finally {
       finish();
       await act(async () => { await polling; });
@@ -80,7 +80,7 @@ describe('TokenHub client', () => {
     const cleanup = vi.spyOn(window, 'clearInterval');
     let workload = 125;
     server.use(http.get('/api/v1/dashboard', () => HttpResponse.json({ ...dashboardFixture, workload_tokens: workload })));
-    const view = render(<App />);
+    const view = render(<App initialView="overview" />);
     try {
       await screen.findByText('125');
       const call = timers.mock.calls.find(([, delay]) => delay === 10_000);
@@ -103,14 +103,14 @@ describe('TokenHub client', () => {
       scans += 1;
       return HttpResponse.json(importOutcomeFixture);
     }));
-    render(<App />);
+    render(<App initialView="overview" />);
     await userEvent.setup().click(await screen.findByRole('button', { name: 'Approve source' }));
     await screen.findByRole('status');
     expect(scans).toBe(1);
   });
 
   it('offers explicit consent to automatically include future Codex sessions', async () => {
-    render(<App />);
+    render(<App initialView="overview" />);
     await userEvent.setup().click(await screen.findByRole('button', { name: 'Include new sessions automatically' }));
     expect(await screen.findByRole('status')).toHaveTextContent(/existing and new Codex sessions/);
   });
@@ -119,7 +119,7 @@ describe('TokenHub client', () => {
     server.use(http.get('/api/v1/discovery', () => HttpResponse.json({
       providers: [{ connector_id: 'codex-local', display_name: 'OpenAI Codex', provider: 'codex', state: 'error', confidence: 'low', evidence_codes: ['discovery_error'], sources: [] }],
     })));
-    render(<App />);
+    render(<App initialView="overview" />);
     const card = await screen.findByRole('article', { name: 'OpenAI Codex' });
     expect(within(card).queryByText('Not detected')).not.toBeInTheDocument();
     expect(within(card).getByText(/could not be checked/)).toBeInTheDocument();
@@ -129,20 +129,20 @@ describe('TokenHub client', () => {
     // One complete 100 + 25 record and one input-only 50 record: workload
     // contains only complete events, but input sums all observed input values.
     server.use(http.get('/api/v1/dashboard', () => HttpResponse.json({ ...dashboardFixture, workload_tokens: 125, input_total_tokens: 150, output_total_tokens: 25 })));
-    render(<App />);
+    render(<App initialView="overview" />);
     await screen.findByRole('heading', { name: 'Observed workload' });
     expect(screen.queryByRole('img', { name: /Workload composition/ })).not.toBeInTheDocument();
     expect(screen.getByText(/incomplete token records/)).toBeInTheDocument();
   });
 
   it('shows composition percentages only from complete observed counts', async () => {
-    render(<App />);
+    render(<App initialView="overview" />);
     expect(await screen.findByRole('img', { name: 'Workload composition: input 80.0%, output 20.0%' })).toBeInTheDocument();
   });
 
   it('shows genuine imported zero totals without dividing by zero', async () => {
     server.use(http.get('/api/v1/dashboard', () => HttpResponse.json({ ...dashboardFixture, workload_tokens: 0, input_total_tokens: 0, output_total_tokens: 0 })));
-    render(<App />);
+    render(<App initialView="overview" />);
     await screen.findByRole('heading', { name: 'Observed workload' });
     expect(screen.getAllByText('0')).toHaveLength(3);
     expect(screen.queryByRole('img', { name: /Workload composition/ })).not.toBeInTheDocument();
@@ -151,7 +151,7 @@ describe('TokenHub client', () => {
 
   it('explains missing counts when events are imported but composition is unknown', async () => {
     server.use(http.get('/api/v1/dashboard', () => HttpResponse.json({ ...dashboardFixture, workload_tokens: null, output_total_tokens: null, event_count: 1 })));
-    render(<App />);
+    render(<App initialView="overview" />);
     await screen.findByRole('heading', { name: 'Observed workload' });
     expect(screen.queryByRole('img', { name: /Workload composition/ })).not.toBeInTheDocument();
     expect(screen.getByText(/missing token counts/)).toBeInTheDocument();
@@ -160,7 +160,7 @@ describe('TokenHub client', () => {
   it('recovers from an API failure without reloading the page', async () => {
     server.use(http.get('/api/v1/discovery', () => new HttpResponse(null, { status: 503 })));
     const user = userEvent.setup();
-    render(<App />);
+    render(<App initialView="overview" />);
     expect(await screen.findByRole('alert')).toBeInTheDocument();
 
     server.use(http.get('/api/v1/discovery', () => HttpResponse.json(discoveryFixture)));
@@ -175,20 +175,20 @@ describe('TokenHub client', () => {
         HttpResponse.json({ quality_counts: {}, source_freshness: [] }),
       ),
     );
-    render(<App />);
+    render(<App initialView="overview" />);
     await screen.findByRole('heading', { name: 'Data quality' });
     expect(screen.queryByText(/fully readable/)).not.toBeInTheDocument();
     expect(screen.getByText(/No source data has been imported yet/)).toBeInTheDocument();
   });
 
   it('shows the cache-write breakdown returned by the API', async () => {
-    render(<App />);
+    render(<App initialView="overview" />);
     const label = await screen.findByText('Cache write tokens');
     expect(within(label.parentElement!).getByText('10')).toBeInTheDocument();
   });
 
   it('disables rebuilding until a supported source has been approved', async () => {
-    render(<App />);
+    render(<App initialView="overview" />);
     await screen.findByRole('heading', { name: 'Data quality' });
     expect(screen.getByRole('button', { name: 'Rebuild index' })).toBeDisabled();
   });
@@ -208,7 +208,7 @@ describe('TokenHub client', () => {
       }),
     );
     const user = userEvent.setup();
-    render(<App />);
+    render(<App initialView="overview" />);
     const buttons = await screen.findAllByRole('button', { name: 'Approve source' });
     try {
       await user.click(buttons[0]);
@@ -222,7 +222,7 @@ describe('TokenHub client', () => {
 
   it('shows a detected Codex source and makes approval available', async () => {
     server.use(http.get('/api/v1/discovery', () => HttpResponse.json(discoveryFixture)));
-    render(<App />);
+    render(<App initialView="overview" />);
 
     expect(await screen.findByRole('heading', { name: 'Local sources' })).toBeInTheDocument();
     expect(screen.getByText('OpenAI Codex')).toBeInTheDocument();
@@ -251,7 +251,7 @@ describe('TokenHub client', () => {
         HttpResponse.json({ ...dashboardFixture, workload_tokens: null }),
       ),
     );
-    render(<App />);
+    render(<App initialView="overview" />);
 
     expect(await screen.findByText('—')).toBeInTheDocument();
   });
@@ -262,7 +262,7 @@ describe('TokenHub client', () => {
         HttpResponse.json({ ...dashboardFixture, workload_tokens: null, input_total_tokens: 0 }),
       ),
     );
-    render(<App />);
+    render(<App initialView="overview" />);
 
     expect(await screen.findByText('0')).toBeInTheDocument();
     expect(screen.queryAllByText('—')).toHaveLength(1);
@@ -284,7 +284,7 @@ describe('TokenHub client', () => {
       }),
     );
 
-    render(<App />);
+    render(<App initialView="overview" />);
     await user.click(await screen.findByRole('button', { name: 'Approve source' }));
 
     expect(await screen.findByRole('status')).toHaveTextContent(/Codex session is approved/i);
@@ -299,7 +299,7 @@ describe('TokenHub client', () => {
       http.post('/api/v1/sources/:sourceId/rescan', () => HttpResponse.json(importOutcomeFixture)),
     );
 
-    render(<App />);
+    render(<App initialView="overview" />);
     await user.click(await screen.findByRole('button', { name: 'Rescan source' }));
 
     const status = await screen.findByRole('status');
@@ -321,7 +321,7 @@ describe('TokenHub client', () => {
     };
     server.use(http.get('/api/v1/discovery', () => HttpResponse.json(contradicted)));
 
-    render(<App />);
+    render(<App initialView="overview" />);
 
     const codexCard = await screen.findByRole('article', { name: 'OpenAI Codex' });
     expect(within(codexCard).getByText(/Confidence: low/)).toBeInTheDocument();
@@ -353,7 +353,7 @@ describe('TokenHub client', () => {
       ),
     );
 
-    render(<App />);
+    render(<App initialView="overview" />);
 
     expect(await screen.findByRole('heading', { name: 'Data quality' })).toBeInTheDocument();
     expect(screen.getByText('Codex session')).toBeInTheDocument();
@@ -361,4 +361,59 @@ describe('TokenHub client', () => {
     expect(screen.getByText('Unsupported records: 2')).toBeInTheDocument();
     expect(screen.getByText(/not fully readable \(partial, unsupported\)/)).toBeInTheDocument();
   });
+});
+
+it.each([
+  ['Claude Code', 'claude-code-local', 'claude_code', 'jsonl', 'claude-jsonl-v1'],
+  ['Hermes Agent', 'hermes-local', 'hermes', 'sqlite', 'hermes-sqlite-v1'],
+])('imports %s usage and enables automatic collection on its own card', async (name, connectorId, providerId, sourceType, parserVersion) => {
+  const sourceId = `${connectorId}:synthetic-usage-source`;
+  const fixture = {
+    providers: discoveryFixture.providers.map((provider) => provider.connector_id === connectorId ? {
+      ...provider, state: 'discovered',
+      sources: [{
+        ...discoveryFixture.providers[1].sources[0],
+        source_id: sourceId, connector_id: connectorId, provider: providerId,
+        display_name: `${name} usage`, source_type: sourceType,
+        parser_version: parserVersion, scan_supported: true,
+      }],
+    } : provider),
+  };
+  let approvedSource = '';
+  let scannedSource = '';
+  server.use(
+    http.get('/api/v1/discovery', () => HttpResponse.json(fixture)),
+    http.post('/api/v1/sources/:sourceId/approve', ({ params }) => {
+      approvedSource = String(params.sourceId);
+      return HttpResponse.json({ source_id: approvedSource, provider: providerId, display_name: name, state: 'approved' });
+    }),
+    http.post('/api/v1/sources/:sourceId/rescan', ({ params }) => {
+      scannedSource = String(params.sourceId);
+      return HttpResponse.json(importOutcomeFixture);
+    }),
+  );
+  render(<App initialView="overview" />);
+  const card = await screen.findByRole('article', { name });
+  expect(within(card).getByText('Import supported')).toBeInTheDocument();
+  await userEvent.setup().click(within(card).getByRole('button', { name: 'Approve source' }));
+  await screen.findByRole('status');
+  expect(approvedSource).toBe(sourceId);
+  expect(scannedSource).toBe(sourceId);
+  await userEvent.setup().click(within(card).getByRole('button', { name: 'Include new sessions automatically' }));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(`existing and new ${name} sessions`));
+  expect(within(card).getByRole('button', { name: 'Stop including new sessions' })).toBeEnabled();
+  await userEvent.setup().click(within(card).getByRole('button', { name: 'Stop including new sessions' }));
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(`New ${name} sessions will need approval`));
+});
+
+
+it('opens the usage explorer by default and retains the overview', async () => {
+  const user = userEvent.setup();
+  render(<App />);
+  await screen.findByRole('table', { name: 'Model usage' });
+  await user.click(screen.getByRole('link', { name: 'Overview' }));
+  expect(screen.getByRole('heading', { name: 'Observed workload' })).toBeInTheDocument();
+  expect(screen.queryByRole('table', { name: 'Model usage' })).not.toBeInTheDocument();
+  await user.click(screen.getByRole('link', { name: 'Usage explorer' }));
+  expect(screen.getByRole('table', { name: 'Model usage' })).toBeInTheDocument();
 });

@@ -1,13 +1,14 @@
 # TokenHub
 
 A local-first usage observatory. TokenHub detects the coding agents installed on
-this machine, imports usage from the one source you explicitly approve, and
-shows the totals on a local dashboard. Nothing leaves the machine: no provider
-API is called, no provider executable is launched, and no prompt, transcript,
-credential, or provider account is ever read.
+this machine, imports usage from sources you explicitly approve, and
+shows agent, model, and session usage in a local explorer. Nothing leaves the machine: no provider
+API is called, no provider executable is launched, and only usage metadata is retained. Credentials and provider accounts are never
+read; transcript content is never stored or shown.
 
-Currently supported: **OpenAI Codex** is the one importable source. **Claude
-Code** and **Hermes Agent** are detection-only in this milestone.
+Supported sources: **OpenAI Codex** session usage, **Claude Code** project and
+subagent session logs, and **Hermes Agent** session counters in its local state
+database.
 
 ## Install and run
 
@@ -38,15 +39,16 @@ cd frontend && npm ci && npm run build      # writes frontend/dist
 
 ## Automatic collection
 
-While TokenHub is running, it scans approved Codex sessions at startup and every
+While TokenHub is running, it scans approved sources from all three providers at startup and every
 30 seconds. The dashboard refreshes itself every 10 seconds. Approving a source
 in the UI also starts its first import immediately; manual rescanning is available
-for troubleshooting. Unchanged files are skipped, and repeated scans do not
+for troubleshooting. Unchanged session files are skipped. Hermes databases are checked on each scan
+because active usage can live in their SQLite journal. Repeated scans do not
 increase totals. Automatic scans of unchanged data do not create extra
 import-history rows, including after restarting TokenHub.
 
-Choose **Include new sessions automatically** on the Codex card to approve the discovered
-session folder once and include both existing and future sessions automatically.
+Choose **Include new sessions automatically** on a provider card to approve the discovered
+usage folder once and include both existing and future sessions automatically.
 This consent survives restarts and is pinned to the folder's device and inode;
 replacing the folder or redirecting it through a symlink cannot authorize another
 location. **Stop including new sessions** removes that folder consent; previously
@@ -54,17 +56,30 @@ approved files keep updating. Without folder consent, new files require approval
 
 `GET /api/v1/collection` reports the scan interval, folder-consent state, last
 completed scan, and failed-source count. Same-origin `POST` requests to
-`/api/v1/collection/codex/enable` and `/disable` change consent. Responses contain
+`/api/v1/collection/{provider}/enable` and `/disable` change consent (`codex`,
+`claude_code`, or `hermes`). Responses contain
 no private paths. Failed sources are retried without preventing other sources
 from updating, and collection runs even when the dashboard is closed.
 
-Only per-response `token_usage_record.payload.usage` values contribute to totals.
+For Codex, only per-response `token_usage_record.payload.usage` values contribute
+to totals.
 Known session messages are skipped. Cumulative token snapshots, malformed records,
 and unknown usage structures remain visible as unsupported records; cumulative
 snapshots are excluded from totals to avoid double counting. Workload is
 input plus output, with cached input and reasoning already included in those
 counts. Token counts are not billing amounts. The UI uses K/M/B abbreviations
 and shows the exact count on hover.
+
+Claude Code reads `message.usage` from assistant records under its `projects`
+folder. Repeated streaming chunks are consolidated by message ID, copied history in
+resumed/forked session files is counted once, and later usage updates replace
+the session's previous normalized records. Hermes reads
+only allowlisted session identifiers, timestamps, and token counters from a
+no-follow snapshot of `state.db` and its journal; no provider database is written.
+Each Hermes session contributes once, with running totals replaced atomically as
+they change. Cache reads and writes are included in the input total for Claude
+and Hermes because both store them in separate buckets. Hermes session
+contributions are marked `high` quality; Claude message usage is marked `exact`.
 
 ## Discovery and approval
 
@@ -85,18 +100,29 @@ Reading telemetry requires two explicit steps:
    `POST /api/v1/rebuild` re-derives all normalized events from scratch and
    leaves totals unchanged.
 
-`GET /api/v1/dashboard` and `GET /api/v1/data-quality` report observed deltas.
+`GET /api/v1/dashboard` and `GET /api/v1/data-quality` report observed usage.
 Workload is input total plus output total; cache and reasoning are breakdowns,
 never extra usage. A metric the data cannot support is returned as `null` and
 rendered as an em dash — TokenHub never substitutes `0` for "unknown".
 
-## Data that is intentionally never read
+The default **Usage explorer** compares Codex, Claude Code, and Hermes Agent.
+Choose an agent to rank its models by total, input, output, cache-read, or
+reasoning tokens. Search for a model, select it to see its sessions, and expand
+a session to compare the models used inside it. Exact counts are available on
+hover. **Overview** retains the consolidated totals.
 
-- Prompts, messages, tool output, transcript bodies, and raw provider records.
-- Provider credentials, API keys, `auth.json`, keychain, and cookie stores.
-- Claude Code and Hermes Agent telemetry. Their connectors expose presence and
-  a discovery-only source entry; `scan` returns `unsupported` for them, and the
-  ingestion service refuses any connector that is not `codex-local`.
+`GET /api/v1/usage` returns canonical totals plus agent, model, and session
+breakdowns. Session identifiers are opaque, stable hashes; original session IDs
+and source paths are not exposed. The same Claude message deduplication is used
+by both views. Known older parsers re-read approved sources on startup to add
+model/session metadata without changing previously imported Codex counters.
+
+## Data boundaries
+
+- Only usage metadata is normalized. Prompts, messages, tool output, transcript
+  bodies, and raw provider records are never retained or returned by the API.
+- Provider credentials, API keys, `auth.json`, keychain, and cookie stores are
+  never read.
 - Anything outside an approved source's own approved root: canonical-path
   validation rejects symlink escapes, and the approved root is re-validated by
   device/inode at every scan.
@@ -131,10 +157,14 @@ at a real provider path or opens a real credential store is a bug.
 
 ## Current limitations
 
-- **Only Codex can be imported.** Claude Code and Hermes Agent are detected but
-  their telemetry is never read; a schema-specific, metadata-only connector must
-  be designed before either becomes importable.
+- **Local schemas only.** Unknown usage structures and malformed records are
+  reported as partial or unavailable. Hermes needs a `sessions` table containing
+  session IDs, start timestamps, and input/output counters. An unsupported or
+  unreadable database leaves previously imported usage intact.
 - **No cost or pricing.** TokenHub reports token counts only — no currency, no
   provider plan data.
-- **No per-model, per-session, or time-series views** in this milestone: totals,
-  breakdowns, and data quality only.
+- **Model attribution depends on recorded metadata.** Missing model names appear
+  in “Model not recorded”. Hermes exposes session totals with a reported model;
+  model switches within that session cannot be split by its current counters.
+- **No time-series view.** Session dates are observed usage dates, and all ledger
+  totals cover imported usage rather than a guessed daily allocation.
