@@ -137,6 +137,7 @@ def discovery(request: Request) -> dict[str, object]:
                 "display_name": result.display_name,
                 "provider": result.provider.value if result.provider is not None else None,
                 "state": result.state.value,
+                "confidence": result.confidence.value,
                 "evidence_codes": list(result.evidence_codes),
                 "sources": [source.model_dump(mode="json") for source in result.sources],
             }

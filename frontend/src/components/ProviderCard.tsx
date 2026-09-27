@@ -1,4 +1,5 @@
 import type { ProviderSummary } from '../types';
+import { Icon, type IconName } from './Icon';
 
 const EVIDENCE_LABELS: Record<string, string> = {
   executable_on_path: 'provider command on PATH',
@@ -12,7 +13,7 @@ const EVIDENCE_LABELS: Record<string, string> = {
  * Sources in these states keep their approval, so a retry is allowed — the same
  * set the backend's `APPROVED_SOURCE_STATES` uses.
  */
-const RESCANNABLE_STATES = new Set([
+export const RESCANNABLE_STATES = new Set([
   'approved',
   'healthy',
   'partial',
@@ -25,23 +26,10 @@ function evidenceLabel(code: string): string {
   return EVIDENCE_LABELS[code] ?? code.split('_').join(' ');
 }
 
-/**
- * The `/discovery` route does not currently return a confidence field, so this
- * is derived from how many independent pieces of evidence were recorded. The
- * label says so, because the UI never presents a derived number as API data.
- */
-function confidenceFor(evidenceCount: number): string {
-  if (evidenceCount >= 2) {
-    return 'high (derived from local evidence)';
-  }
-  return evidenceCount === 1
-    ? 'medium (derived from local evidence)'
-    : 'low (derived from local evidence)';
-}
-
 interface ProviderCardProps {
   provider: ProviderSummary;
   busySourceId: string | null;
+  actionsDisabled?: boolean;
   onApprove: (sourceId: string) => void;
   onRescan: (sourceId: string) => void;
 }
@@ -51,20 +39,29 @@ interface ProviderCardProps {
  * itself allows them: the connector must support scanning and the source state
  * must permit the action. Otherwise the card is read-only information.
  */
-export function ProviderCard({ provider, busySourceId, onApprove, onRescan }: ProviderCardProps) {
+export function ProviderCard({ provider, busySourceId, actionsDisabled = false, onApprove, onRescan }: ProviderCardProps) {
   const evidence = provider.evidence_codes.map(evidenceLabel);
   const evidenceText = evidence.length > 0 ? evidence.join(', ') : 'none recorded';
+  const supported = provider.sources.some((source) => source.scan_supported);
+  const detected = provider.evidence_codes.some((code) => code !== 'discovery_error');
+  const detectionFailed = provider.state === 'error' || provider.evidence_codes.includes('discovery_error');
+  const symbols: Record<string, IconName> = { codex: 'terminal', claude_code: 'sparkle', hermes: 'hermes' };
+  const stateLabel = detectionFailed ? 'Detection failed' : supported ? 'Import supported' : detected ? 'Detection only' : 'Not detected';
 
   return (
-    <article className="provider-card" aria-labelledby={`provider-${provider.connector_id}`}>
-      <h3 id={`provider-${provider.connector_id}`}>{provider.display_name}</h3>
-      <p className="provider-card__evidence">
-        Evidence: {evidenceText}. Confidence: {confidenceFor(evidence.length)}.
+    <article className={`provider-card provider-card--${provider.provider ?? 'unknown'}`} aria-labelledby={`provider-${provider.connector_id}`}>
+      <div className="provider-card__header">
+        <span className="provider-card__icon"><Icon name={symbols[provider.provider ?? ''] ?? 'sources'} /></span>
+        <h3 id={`provider-${provider.connector_id}`}>{provider.display_name}</h3>
+        <span className={`badge ${detectionFailed ? 'badge--warning' : supported ? 'badge--success' : 'badge--neutral'}`}>{stateLabel}</span>
+      </div>
+      <p className="provider-card__description">
+        {detectionFailed ? 'This installation could not be checked. Choose Refresh data to retry detection.' : supported ? 'Import token counts from local sessions. You decide when to read them.' : detected ? 'Installation detected. Usage imports are not supported yet.' : 'No installation detected on this machine.'}
       </p>
 
       {provider.sources.length === 0 ? (
         <p className="provider-card__note">
-          No local source was found for {provider.display_name}.
+          {detectionFailed ? 'Source availability is unknown until detection succeeds.' : `No local source was found for ${provider.display_name}.`}
         </p>
       ) : (
         <ul className="provider-card__sources">
@@ -77,27 +74,31 @@ export function ProviderCard({ provider, busySourceId, onApprove, onRescan }: Pr
             return (
               <li key={source.source_id}>
                 <p className="provider-card__source" id={descriptionId}>
-                  {source.display_name}: state {source.state}.{' '}
-                  {source.scan_supported ? 'Import supported' : 'Discovery only'}.
+                  <span>{source.display_name}: state {source.state}.</span>{' '}
+                  {source.scan_supported ? null : 'Discovery only.'}
                 </p>
                 {canApprove ? (
                   <button
                     type="button"
+                    className="button button--primary"
                     aria-describedby={descriptionId}
-                    disabled={busy}
+                    aria-busy={busy}
+                    disabled={busy || actionsDisabled}
                     onClick={() => onApprove(source.source_id)}
                   >
-                    Approve source
+                    <Icon name={busy ? 'refresh' : 'check'} className={busy ? 'is-spinning' : ''} />Approve source
                   </button>
                 ) : null}
                 {canRescan ? (
                   <button
                     type="button"
+                    className="button button--primary"
                     aria-describedby={descriptionId}
-                    disabled={busy}
+                    aria-busy={busy}
+                    disabled={busy || actionsDisabled}
                     onClick={() => onRescan(source.source_id)}
                   >
-                    Rescan source
+                    <Icon name="refresh" className={busy ? 'is-spinning' : ''} />Rescan source
                   </button>
                 ) : null}
               </li>
@@ -105,6 +106,10 @@ export function ProviderCard({ provider, busySourceId, onApprove, onRescan }: Pr
           })}
         </ul>
       )}
+      <details className="provider-card__details">
+        <summary>Detection details <span>{provider.confidence} confidence</span></summary>
+        <p className="provider-card__evidence">Evidence: {evidenceText}. Confidence: {provider.confidence}.</p>
+      </details>
     </article>
   );
 }

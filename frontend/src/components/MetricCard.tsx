@@ -1,3 +1,5 @@
+import { Icon, type IconName } from './Icon';
+
 /** Rendered whenever the API reports a metric it could not observe. */
 export const UNKNOWN_METRIC = '—';
 
@@ -15,13 +17,17 @@ export function formatMetric(value: number | null | undefined): string {
 interface MetricCardProps {
   label: string;
   value: number | null | undefined;
+  icon?: IconName;
+  note?: string;
+  featured?: boolean;
 }
 
-export function MetricCard({ label, value }: MetricCardProps) {
+export function MetricCard({ label, value, icon, note, featured = false }: MetricCardProps) {
   return (
-    <div className="metric-card">
-      <dt className="metric-card__label">{label}</dt>
+    <div className={`metric-card${featured ? ' metric-card--featured' : ''}`}>
+      <dt className="metric-card__label">{label}{icon ? <Icon name={icon} /> : null}</dt>
       <dd className="metric-card__value">{formatMetric(value)}</dd>
+      {note ? <dd className="metric-card__note">{note}</dd> : null}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 """Provider-neutral models for normalized usage data."""
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -39,6 +40,48 @@ class Quality(StrEnum):
     ESTIMATED = "estimated"
     PARTIAL = "partial"
     UNAVAILABLE = "unavailable"
+
+
+class Confidence(StrEnum):
+    """How sure discovery is that a provider is really present.
+
+    Always derived from recorded evidence, never guessed: see
+    :func:`confidence_from_evidence`.
+    """
+
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+#: Signals a connector records when it observes something real about a provider.
+#: A code that is not listed here is ignored rather than counted, so adding a
+#: new evidence code can never silently raise a provider's confidence.
+EVIDENCE_SIGNAL_CODES = frozenset(
+    {
+        "executable_on_path",
+        "known_root_exists",
+        "configuration_found",
+        "session_source_found",
+        "state_database_found",
+    }
+)
+
+#: Independent signals needed before discovery claims high confidence.
+_HIGH_CONFIDENCE_SIGNALS = 2
+
+
+def confidence_from_evidence(codes: Iterable[str]) -> Confidence:
+    """Summarize independent discovery signals as a confidence level.
+
+    Two or more distinct signals → ``HIGH``, exactly one → ``MEDIUM``, none →
+    ``LOW``. Repeated codes count once: the same signal observed twice is not
+    two independent reasons to believe a provider is installed.
+    """
+    signals = {code for code in codes if code in EVIDENCE_SIGNAL_CODES}
+    if len(signals) >= _HIGH_CONFIDENCE_SIGNALS:
+        return Confidence.HIGH
+    return Confidence.MEDIUM if signals else Confidence.LOW
 
 
 @dataclass(frozen=True, slots=True)

@@ -39,10 +39,12 @@ cd frontend && npm ci && npm run build      # writes frontend/dist
 ## Discovery and approval
 
 `GET /api/v1/discovery` reports each provider's display name, connection state,
-the evidence codes it found (`executable_on_path`, `known_root_exists`,
-`configuration_found`, `session_source_found`, `state_database_found`), and a
-stable path fingerprint. Discovery reads **presence only** — it stats candidate
-roots and directories and never opens a provider file.
+a confidence level derived from its evidence (`high` when two or more
+independent signals were found, `medium` for one, `low` for none), the evidence
+codes it found (`executable_on_path`, `known_root_exists`, `configuration_found`,
+`session_source_found`, `state_database_found`), and a stable path fingerprint.
+Discovery reads **presence only** — it stats candidate roots and directories and
+never opens a provider file.
 
 Reading telemetry requires two explicit steps:
 
@@ -106,7 +108,3 @@ at a real provider path or opens a real credential store is a bug.
   provider plan data.
 - **No per-model, per-session, or time-series views** in this milestone: totals,
   breakdowns, and data quality only.
-- **`/api/v1/discovery` does not yet return a `confidence` field.** The UI
-  derives a confidence label from the number of evidence codes and labels it as
-  derived, rather than inventing an API value. Recorded in the design doc under
-  verified deviations.

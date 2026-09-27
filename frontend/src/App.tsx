@@ -10,7 +10,9 @@ import {
   rescanSource,
 } from './api/client';
 import { MetricCard } from './components/MetricCard';
-import { ProviderCard } from './components/ProviderCard';
+import { ProviderCard, RESCANNABLE_STATES } from './components/ProviderCard';
+import { Icon } from './components/Icon';
+import { UsageComposition } from './components/UsageComposition';
 import type {
   DashboardSummary,
   DataQualityResponse,
@@ -32,7 +34,7 @@ const INCOMPLETE_STATES = new Set([
 
 function describeError(cause: unknown): string {
   if (cause instanceof ApiError) {
-    return `TokenHub could not complete that request. ${cause.message}`;
+    return `The local server could not complete this request (status ${cause.status}). Try refreshing the data.`;
   }
   return 'TokenHub could not reach its local API. Start the local server and reload this page.';
 }
@@ -66,7 +68,7 @@ function formatTimestamp(value: string | null): string {
   if (Number.isNaN(parsed.getTime())) {
     return 'not reported';
   }
-  return parsed.toISOString().replace('T', ' ').replace('Z', ' UTC');
+  return `${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }).format(parsed)} UTC`;
 }
 
 function displayNameForSource(discovery: DiscoveryResponse | null, sourceId: string): string {
@@ -88,9 +90,15 @@ function formatQualityCounts(counts: Record<string, number>): string {
   return `Import quality: ${entries.map(([name, count]) => `${name} ${count}`).join(', ')}.`;
 }
 
-function explainQuality(incomplete: SourceFreshness[]): string {
+function explainQuality(freshness: SourceFreshness[]): string {
+  if (freshness.length === 0) {
+    return 'No source data has been imported yet. Approve a supported source, then choose Rescan source to get started.';
+  }
+  const incomplete = freshness.filter((entry) => INCOMPLETE_STATES.has(entry.state));
   if (incomplete.length === 0) {
-    return 'Every discovered source is fully readable right now.';
+    return freshness.every((entry) => entry.state === 'healthy')
+      ? 'Imported sources are healthy. Totals include only observed usage.'
+      : 'Some sources are waiting for an import. Approve a supported source, then choose Rescan source.';
   }
   const states = incomplete.map((entry) => entry.state).join(', ');
   return (
@@ -108,6 +116,8 @@ export default function App() {
   const [status, setStatus] = useState<string | null>(null);
   const [busySourceId, setBusySourceId] = useState<string | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [activeSection, setActiveSection] = useState('observed-workload');
 
   const refresh = useCallback(async () => {
     const [nextDiscovery, nextDashboard, nextQuality] = await Promise.all([
@@ -131,6 +141,19 @@ export default function App() {
       active = false;
     };
   }, [refresh]);
+
+  async function handleRefresh() {
+    setError(null);
+    setStatus(null);
+    setRefreshing(true);
+    try {
+      await refresh();
+    } catch (cause: unknown) {
+      setError(describeError(cause));
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function handleApprove(sourceId: string) {
     setError(null);
@@ -179,105 +202,146 @@ export default function App() {
     }
   }
 
-  const incomplete = (quality?.source_freshness ?? []).filter((entry) =>
-    INCOMPLETE_STATES.has(entry.state),
-  );
   const loading = discovery === null && dashboard === null && quality === null && error === null;
+  const actionsDisabled = busySourceId !== null || rebuilding || refreshing || loading;
+  const sources = discovery?.providers.flatMap((provider) => provider.sources) ?? [];
+  const approvedCount = sources.filter((source) => source.scan_supported && RESCANNABLE_STATES.has(source.state)).length;
+  const detectedCount = discovery?.providers.filter((provider) => provider.evidence_codes.some((code) => code !== 'discovery_error')).length ?? 0;
+  const providers = [...(discovery?.providers ?? [])].sort((a, b) => Number(b.sources.some((source) => source.scan_supported)) - Number(a.sources.some((source) => source.scan_supported)));
 
   return (
     <div className="app">
-      <header className="app__header">
-        <h1>TokenHub</h1>
-        <p className="app__tagline">Local usage observatory</p>
-        <p className="app__privacy">
-          Everything here is read from this machine. TokenHub never reads prompts, transcripts,
-          credentials, or provider accounts, and it shows no paths.
-        </p>
-      </header>
+      <a className="skip-link" href="#main-content">Skip to dashboard</a>
+      <aside className="sidebar">
+        <a className="brand" href="#main-content" aria-label="TokenHub dashboard">
+          <span className="brand__mark"><Icon name="layers" /></span>
+          <span>TokenHub<small>Local usage observatory</small></span>
+        </a>
+        <div className="sidebar__label">Your workspace</div>
+        <nav className="sidebar__nav" aria-label="Dashboard sections">
+          {([
+            ['observed-workload', 'overview', 'Overview'],
+            ['local-sources', 'sources', 'Local sources'],
+            ['data-quality', 'quality', 'Data quality'],
+          ] as const).map(([id, icon, label]) => (
+            <a key={id} href={`#${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={() => setActiveSection(id)}>
+              <Icon name={icon} /><span>{label}</span>
+            </a>
+          ))}
+        </nav>
+        <div className="sidebar__privacy">
+          <Icon name="shield" />
+          <strong>Private by default</strong>
+          <p>Your data stays on this device. No accounts. No cloud sync.</p>
+          <a href="#privacy-note">How your data is handled</a>
+        </div>
+        <div className="sidebar__footer"><span className="status-dot" />Local workspace</div>
+      </aside>
 
-      {error !== null ? (
-        <p className="app__error" role="alert">
-          {error}
-        </p>
-      ) : null}
-
-      {status !== null ? (
-        <p className="app__status" role="status">
-          {status}
-        </p>
-      ) : null}
-
-      {loading ? <p className="app__loading">Reading local provider data…</p> : null}
-
-      {discovery !== null ? (
-        <section className="panel" aria-labelledby="local-sources-heading">
-          <h2 id="local-sources-heading">Local sources</h2>
-          <p className="panel__intro">
-            Detected provider roots and whether TokenHub may read them. Nothing is imported until a
-            source is approved.
-          </p>
-          <div className="provider-grid">
-            {discovery.providers.map((provider) => (
-              <ProviderCard
-                key={provider.connector_id}
-                provider={provider}
-                busySourceId={busySourceId}
-                onApprove={handleApprove}
-                onRescan={handleRescan}
-              />
-            ))}
+      <main className="app__main" id="main-content" tabIndex={-1}>
+        <div className="topbar">
+          <span className="breadcrumb">Workspace <span>/</span> <strong>Overview</strong></span>
+          <span className="device-pill"><Icon name="device" />On this device</span>
+        </div>
+        <header className="app__header">
+          <div>
+            <h1>Your usage, in focus.</h1>
+            <p className="app__tagline">A clear view of your coding agents. Everything stays on this machine.</p>
           </div>
-        </section>
-      ) : null}
-
-      {dashboard !== null ? (
-        <section className="panel" aria-labelledby="observed-workload-heading">
-          <h2 id="observed-workload-heading">Observed workload</h2>
-          <p className="panel__intro">
-            Workload is imported input plus output. Cache and reasoning are breakdowns of that
-            total, never extra usage. Unknown values are left blank.
-          </p>
-          <dl className="metric-grid">
-            <MetricCard label="Workload tokens" value={dashboard.workload_tokens} />
-            <MetricCard label="Input tokens" value={dashboard.input_total_tokens} />
-            <MetricCard label="Output tokens" value={dashboard.output_total_tokens} />
-            <MetricCard label="Cache read tokens" value={dashboard.cache_read_tokens} />
-            <MetricCard label="Reasoning tokens" value={dashboard.reasoning_tokens} />
-          </dl>
-          <p className="panel__footnote">
-            Events imported: {dashboard.event_count}. {formatQualityCounts(dashboard.quality_counts)}
-          </p>
-        </section>
-      ) : null}
-
-      {quality !== null ? (
-        <section className="panel" aria-labelledby="data-quality-heading">
-          <h2 id="data-quality-heading">Data quality</h2>
-          <ul className="source-status">
-            {quality.source_freshness.map((entry) => (
-              <li key={entry.source_id} className="source-status__item">
-                <span className="source-status__name">
-                  {displayNameForSource(discovery, entry.source_id)}
-                </span>
-                <span className="source-status__state">{entry.state}</span>
-                <span className="source-status__detail">
-                  Latest event: {formatTimestamp(entry.latest_event_at)}
-                </span>
-                {entry.unsupported_records != null ? (
-                  <span className="source-status__detail">
-                    Unsupported records: {entry.unsupported_records}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-          <p className="source-status__explainer">{explainQuality(incomplete)}</p>
-          <p className="panel__footnote">{formatQualityCounts(quality.quality_counts)}</p>
-          <button type="button" onClick={handleRebuild} disabled={rebuilding}>
-            Rebuild index
+          <button type="button" className="button button--secondary" onClick={handleRefresh} disabled={actionsDisabled} aria-busy={refreshing}>
+            <Icon name="refresh" className={refreshing ? 'is-spinning' : ''} />Refresh data
           </button>
-        </section>
-      ) : null}
+        </header>
+
+        {error !== null ? <p className="notice notice--error" role="alert"><Icon name="info" />{error}</p> : null}
+        {status !== null ? <p className="notice notice--success" role="status"><Icon name="check" />{status}</p> : null}
+        {loading ? (
+          <div className="loading-state" aria-live="polite" aria-busy="true">
+            <Icon name="refresh" className="is-spinning" />Reading local provider data…
+            <div className="loading-state__cards" aria-hidden="true"><span /><span /><span /></div>
+          </div>
+        ) : null}
+
+        {dashboard !== null ? (
+          <section className="panel overview-panel" id="observed-workload" aria-labelledby="observed-workload-heading">
+            <div className="section-heading">
+              <h2 id="observed-workload-heading">Observed workload</h2>
+              <span className="section-meta">All imported events</span>
+            </div>
+            <dl className="metric-grid">
+              <MetricCard label="Workload tokens" value={dashboard.workload_tokens} icon="layers" note="Complete input + output records" featured />
+              <MetricCard label="Input tokens" value={dashboard.input_total_tokens} icon="input" note="Includes cached input" />
+              <MetricCard label="Output tokens" value={dashboard.output_total_tokens} icon="output" note="Includes reasoning" />
+            </dl>
+            <dl className="breakdown-grid">
+              <MetricCard label="Cache read tokens" value={dashboard.cache_read_tokens} icon="cache" note="Within input" />
+              <MetricCard label="Cache write tokens" value={dashboard.cache_write_tokens} icon="cache" note="Reported separately" />
+              <MetricCard label="Reasoning tokens" value={dashboard.reasoning_tokens} icon="reasoning" note="Within output" />
+            </dl>
+            <div className="overview-details">
+              <UsageComposition dashboard={dashboard} />
+              <aside className="privacy-card" id="privacy-note" aria-labelledby="privacy-heading">
+                <span className="privacy-card__icon"><Icon name="shield" /></span>
+                <h3 id="privacy-heading">Your data stays yours.</h3>
+                <p>TokenHub reads approved usage metadata locally. It never reads prompts, transcripts, credentials, or provider accounts.</p>
+                <span><Icon name="check" />No data leaves this machine</span>
+              </aside>
+            </div>
+            <p className="panel__footnote">Events imported: {dashboard.event_count.toLocaleString('en-US')}. Unknown values appear as an em dash.</p>
+            {dashboard.event_count === 0 ? (
+              <div className="getting-started">
+                <span className="getting-started__icon"><Icon name="sources" /></span>
+                <div><strong>Your first import starts here</strong><p>Approve a supported local source, then rescan it to see your usage.</p></div>
+                <a className="button button--secondary" href="#local-sources" onClick={() => setActiveSection('local-sources')}>View local sources<Icon name="arrow" /></a>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        {discovery !== null ? (
+          <section className="panel" id="local-sources" aria-labelledby="local-sources-heading">
+            <div className="section-heading">
+              <div><h2 id="local-sources-heading">Local sources</h2><p className="panel__intro">Your coding agents, connected on your terms. Nothing is imported until you approve it.</p></div>
+              <span className="section-meta">{detectedCount} providers detected</span>
+            </div>
+            <div className="provider-grid">
+              {providers.map((provider) => (
+                <ProviderCard key={provider.connector_id} provider={provider} busySourceId={busySourceId} actionsDisabled={actionsDisabled} onApprove={handleApprove} onRescan={handleRescan} />
+              ))}
+            </div>
+            <p className="source-disclaimer"><Icon name="info" />Codex supports usage imports. Claude Code and Hermes are detection-only for now.</p>
+          </section>
+        ) : null}
+
+        {quality !== null ? (
+          <section className="panel" id="data-quality" aria-labelledby="data-quality-heading">
+            <div className="section-heading">
+              <div><h2 id="data-quality-heading">Data quality</h2><p className="panel__intro">Know what was read, and what is still missing.</p></div>
+              <button type="button" className="button button--secondary" onClick={handleRebuild} disabled={actionsDisabled || approvedCount === 0} aria-busy={rebuilding} title={approvedCount === 0 ? 'Approve a supported source before rebuilding' : 'Re-import approved sources to rebuild the local index'}>
+                <Icon name="refresh" className={rebuilding ? 'is-spinning' : ''} />{rebuilding ? 'Rebuilding index…' : 'Rebuild index'}
+              </button>
+            </div>
+            <div className="quality-panel">
+              {quality.source_freshness.length > 0 ? (
+                <ul className="source-status">
+                  {quality.source_freshness.map((entry) => (
+                    <li key={entry.source_id} className="source-status__item">
+                      <span className="source-status__name"><Icon name="sources" />{displayNameForSource(discovery, entry.source_id)}</span>
+                      <span className={`badge ${entry.state === 'healthy' ? 'badge--success' : INCOMPLETE_STATES.has(entry.state) ? 'badge--warning' : 'badge--neutral'}`}>{entry.state.replaceAll('_', ' ')}</span>
+                      <span className="source-status__detail">Latest event: {formatTimestamp(entry.latest_event_at)}</span>
+                      {entry.unsupported_records != null ? <span className="source-status__detail">Unsupported records: {entry.unsupported_records}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <div className="quality-panel__note"><Icon name="info" /><p className="source-status__explainer">{explainQuality(quality.source_freshness)}</p></div>
+              <p className="panel__footnote">{formatQualityCounts(quality.quality_counts)}</p>
+            </div>
+            {approvedCount === 0 ? <p className="panel__footnote">Rebuilding becomes available after a supported source is approved.</p> : null}
+          </section>
+        ) : null}
+        <footer className="app__footer"><span>TokenHub · Local usage observatory</span><span><Icon name="shield" />Observed data. No estimates.</span></footer>
+      </main>
     </div>
   );
 }

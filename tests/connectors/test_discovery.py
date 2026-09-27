@@ -16,7 +16,7 @@ from tokenhub.database.models import SourceRecord
 from tokenhub.database.repositories import SourceRepository
 from tokenhub.database.session import create_engine_for, initialize_database
 from tokenhub.discovery.service import DiscoveryService
-from tokenhub.domain.models import Provider, SourceDescriptor, SourceState
+from tokenhub.domain.models import Confidence, Provider, SourceDescriptor, SourceState
 from tokenhub.settings import TokenHubSettings
 
 
@@ -37,6 +37,29 @@ def test_codex_detection_uses_override_and_reports_safe_evidence(tmp_path: Path)
     assert "session_source_found" in result.evidence_codes
     assert str(codex_root) not in result.model_dump_json()
     assert str(home) not in result.model_dump_json()
+
+
+def test_detection_reports_confidence_from_its_own_evidence(tmp_path: Path) -> None:
+    """Fails if the wire contract drops confidence or disagrees with evidence."""
+    home = tmp_path / "home"
+    codex_root = tmp_path / "codex"
+    session_dir = codex_root / "sessions" / "2026" / "09" / "20"
+    session_dir.mkdir(parents=True)
+    (session_dir / "rollout.jsonl").write_text("{}\n")
+    (codex_root / "config.toml").write_text("synthetic\n")
+
+    detected = CodexConnector().detect(
+        DiscoveryContext(home=home, environment={"CODEX_HOME": str(codex_root)}, which=lambda _: None)
+    )
+    missing = CodexConnector().detect(
+        DiscoveryContext(home=home, environment={}, which=lambda _: None)
+    )
+
+    # Two independent signals (root + session source) → high; nothing → low.
+    assert detected.confidence is Confidence.HIGH
+    assert missing.confidence is Confidence.LOW
+    assert '"confidence":"high"' in detected.model_dump_json()
+    assert str(codex_root) not in detected.model_dump_json()
 
 
 def test_codex_candidates_only_include_regular_session_jsonl(tmp_path: Path) -> None:

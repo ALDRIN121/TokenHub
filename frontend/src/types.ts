@@ -24,6 +24,8 @@ export interface ProviderSummary {
   display_name: string;
   provider: string | null;
   state: string;
+  /** How sure discovery is that this provider is present. Reported by the API. */
+  confidence: string;
   evidence_codes: string[];
   sources: SourceSummary[];
 }

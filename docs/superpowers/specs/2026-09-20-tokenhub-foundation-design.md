@@ -159,14 +159,15 @@ This is consistent with the official Codex configuration model: `CODEX_HOME` is 
 Recorded by Task 9 after the implementation and review gates, so the spec and the
 shipped behavior can be compared directly.
 
-1. **`/api/v1/discovery` does not return a `confidence` field.** The API contract
+1. **RESOLVED — `/api/v1/discovery` now returns `confidence`.** The API contract
    above lists `confidence` alongside display name, connection state, safe
-   evidence, and the source identifier. The shipped route returns the evidence
-   codes but no confidence value. The UI derives a confidence label from the
-   number of evidence codes and labels it explicitly as derived
-   ("high/medium/low (derived from local evidence)") rather than presenting a
-   computed value as API data. Adding a real field is a follow-up to Tasks 4/6,
-   not a Task 7-9 change.
+   evidence, and the source identifier. The field was missing when Task 7 first
+   shipped; it is now part of the payload, derived once in the domain
+   (`confidence_from_evidence`: two or more distinct evidence signals → `high`,
+   one → `medium`, none → `low`) and exposed as a computed field on
+   `DetectionResult`. The client renders the reported value instead of computing
+   its own, so the two can no longer disagree. Follow-up plan:
+   `.hermes/plans/2026-09-22_020835-discovery-confidence-field.md`.
 2. **The CLI does not open a browser.** `main()` prints the loopback URL and
    starts Uvicorn; nothing auto-opens a browser window. The spec never required
    auto-open, so this is a deliberate omission rather than a broken promise.

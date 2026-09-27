@@ -5,14 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 from tokenhub.domain.models import (
+    Confidence,
     Provider,
     SourceDescriptor,
     SourceState,
     SyncCursor,
     UsageEvent,
+    confidence_from_evidence,
 )
 
 
@@ -45,6 +47,16 @@ class DetectionResult(BaseModel):
     state: SourceState
     evidence_codes: tuple[str, ...] = ()
     sources: tuple[SafeSourceView, ...] = ()
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def confidence(self) -> Confidence:
+        """How sure discovery is that this provider is present.
+
+        Derived from the evidence this detection recorded, so the API contract
+        and the connector can never disagree about it.
+        """
+        return confidence_from_evidence(self.evidence_codes)
 
 
 @dataclass(frozen=True, slots=True)

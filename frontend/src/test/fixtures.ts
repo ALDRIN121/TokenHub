@@ -16,6 +16,8 @@ export const discoveryFixture: DiscoveryResponse = {
       display_name: 'Claude Code',
       provider: 'claude_code',
       state: 'discovered',
+      // Two independent signals → high (see confidence_from_evidence in the backend).
+      confidence: 'high',
       evidence_codes: ['known_root_exists', 'configuration_found'],
       // The Claude Code connector is presence-only: it never reports a source.
       sources: [],
@@ -25,6 +27,7 @@ export const discoveryFixture: DiscoveryResponse = {
       display_name: 'OpenAI Codex',
       provider: 'codex',
       state: 'discovered',
+      confidence: 'high',
       evidence_codes: ['known_root_exists', 'session_source_found'],
       sources: [
         {
@@ -46,6 +49,7 @@ export const discoveryFixture: DiscoveryResponse = {
       display_name: 'Hermes Agent',
       provider: 'hermes',
       state: 'unsupported',
+      confidence: 'high',
       evidence_codes: ['known_root_exists', 'state_database_found'],
       sources: [
         {
