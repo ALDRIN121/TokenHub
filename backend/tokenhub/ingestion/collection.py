@@ -1,0 +1,112 @@
+"""Periodic collection through the existing approval and incremental scan gates."""
+
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+from tokenhub.database.repositories import SourceRepository, UsageRepository
+from tokenhub.discovery.service import DiscoveryService
+from tokenhub.domain.models import SourceState
+from tokenhub.ingestion.service import IngestionService, UnsupportedSourceError
+from tokenhub.security.paths import open_source_path
+
+
+class CollectionService:
+    def __init__(
+        self,
+        sources: SourceRepository,
+        usage: UsageRepository,
+        discovery: DiscoveryService,
+        ingestion: IngestionService,
+    ) -> None:
+        self.sources = sources
+        self.usage = usage
+        self.discovery = discovery
+        self.ingestion = ingestion
+        self.last_scan_at: datetime | None = None
+        self.failed_source_count = 0
+        self._seen_files: dict[str, tuple[int, int, int, int]] = {}
+
+    def enable_codex(self) -> None:
+        results = self.discovery.discover()
+        candidate = next(
+            (
+                self.discovery.candidate(source.source_id)
+                for result in results if result.connector_id == "codex-local"
+                for source in result.sources if source.scan_supported
+            ),
+            None,
+        )
+        if candidate is None:
+            raise UnsupportedSourceError("no supported Codex source was discovered")
+        self.sources.enable_auto_import(candidate)
+        self.run_once()
+
+    def run_once(self) -> None:
+        failures: set[str] = set()
+        roots = {root.connector_id: root for root in self.sources.auto_import_roots()}
+        for result in self.discovery.discover():
+            root = roots.get(result.connector_id)
+            if root is None:
+                continue
+            for view in result.sources:
+                if not view.scan_supported or view.state is not SourceState.DISCOVERED:
+                    continue
+                candidate = self.discovery.candidate(view.source_id)
+                if (
+                    str(candidate.approved_root) != root.approved_root
+                    or candidate.approved_root_device != root.approved_root_device
+                    or candidate.approved_root_inode != root.approved_root_inode
+                ):
+                    continue
+                try:
+                    self.ingestion.approve(view.source_id)
+                except Exception:  # noqa: BLE001 - isolate one source's approval failure
+                    self.sources.session.rollback()
+                    failures.add(view.source_id)
+
+        for source in self.sources.approved_sources():
+            if source.connector_id != "codex-local" or not source.scan_supported:
+                continue
+            try:
+                if source.canonical_path is None or source.approved_root is None:
+                    continue
+                if source.approved_root_device is None or source.approved_root_inode is None:
+                    raise ValueError("approved source has no trusted root identity")
+                descriptor = open_source_path(
+                    Path(source.canonical_path), Path(source.approved_root),
+                    (source.approved_root_device, source.approved_root_inode),
+                )
+                try:
+                    metadata = os.fstat(descriptor)
+                finally:
+                    os.close(descriptor)
+                identity = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+                cursor = self.usage.current_cursor(source.source_id)
+                if (
+                    self._seen_files.get(source.source_id) == identity
+                    and source.state in {SourceState.HEALTHY.value, SourceState.PARTIAL.value}
+                    and cursor is not None
+                    and cursor.byte_offset <= metadata.st_size
+                    and cursor.parser_version == source.parser_version
+                ):
+                    continue
+                self.ingestion.rescan(source.source_id, record_unchanged=False)
+                self._seen_files[source.source_id] = identity
+            except Exception:  # noqa: BLE001 - one bad source must not starve the others
+                self._seen_files.pop(source.source_id, None)
+                self.sources.session.rollback()
+                self.sources.set_state(source.source_id, SourceState.ERROR)
+                failures.add(source.source_id)
+        self.failed_source_count = len(failures)
+        self.last_scan_at = datetime.now(UTC)
+
+    def status(self, interval: float) -> dict[str, object]:
+        return {
+            "scan_interval_seconds": interval,
+            "codex_auto_import": any(
+                root.connector_id == "codex-local" for root in self.sources.auto_import_roots()
+            ),
+            "last_scan_at": self.last_scan_at.isoformat() if self.last_scan_at else None,
+            "failed_source_count": self.failed_source_count,
+        }

@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   ApiError,
   approveSource,
   getDashboard,
   getDataQuality,
+  getCollectionStatus,
   getDiscovery,
   rebuildIndex,
   rescanSource,
+  setCodexAutoImport,
 } from './api/client';
 import { MetricCard } from './components/MetricCard';
 import { ProviderCard, RESCANNABLE_STATES } from './components/ProviderCard';
@@ -15,6 +17,7 @@ import { Icon } from './components/Icon';
 import { UsageComposition } from './components/UsageComposition';
 import type {
   DashboardSummary,
+  CollectionStatus,
   DataQualityResponse,
   DiscoveryResponse,
   ImportOutcome,
@@ -92,18 +95,18 @@ function formatQualityCounts(counts: Record<string, number>): string {
 
 function explainQuality(freshness: SourceFreshness[]): string {
   if (freshness.length === 0) {
-    return 'No source data has been imported yet. Approve a supported source, then choose Rescan source to get started.';
+    return 'No source data has been imported yet. Approve a supported source to start automatic imports.';
   }
   const incomplete = freshness.filter((entry) => INCOMPLETE_STATES.has(entry.state));
   if (incomplete.length === 0) {
     return freshness.every((entry) => entry.state === 'healthy')
       ? 'Imported sources are healthy. Totals include only observed usage.'
-      : 'Some sources are waiting for an import. Approve a supported source, then choose Rescan source.';
+      : 'Some sources are waiting for an import. Approve a supported source to start automatic imports.';
   }
-  const states = incomplete.map((entry) => entry.state).join(', ');
+  const states = [...new Set(incomplete.map((entry) => entry.state))].join(', ');
   return (
     `Some sources are not fully readable (${states}). TokenHub reports only the records it could ` +
-    'read: a partial import means the newest record was still being written, and an unsupported ' +
+    'read: a partial import means some usage records were unsupported or the newest record was still being written, and an unsupported ' +
     'source means its records could not be read at all. Neither case is ever estimated or filled in.'
   );
 }
@@ -118,20 +121,48 @@ export default function App() {
   const [rebuilding, setRebuilding] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [activeSection, setActiveSection] = useState('observed-workload');
+  const [collection, setCollection] = useState<CollectionStatus | null>(null);
+  const [settingAutoImport, setSettingAutoImport] = useState(false);
+  const refreshInFlight = useRef<Promise<void> | null>(null);
+  const refreshAgain = useRef(false);
+  const mounted = useRef(true);
 
   const refresh = useCallback(async () => {
-    const [nextDiscovery, nextDashboard, nextQuality] = await Promise.all([
-      getDiscovery(),
-      getDashboard(),
-      getDataQuality(),
-    ]);
-    setDiscovery(nextDiscovery);
-    setDashboard(nextDashboard);
-    setQuality(nextQuality);
+    if (refreshInFlight.current !== null) {
+      refreshAgain.current = true;
+      await refreshInFlight.current;
+      return;
+    }
+    const operation = (async () => {
+      do {
+        refreshAgain.current = false;
+        const requests = [
+          getDiscovery(), getDashboard(), getDataQuality(), getCollectionStatus(),
+        ] as const;
+        const [nextDiscovery, nextDashboard, nextQuality, nextCollection] = await Promise.all(requests)
+          .catch(async (cause: unknown) => {
+            await Promise.allSettled(requests);
+            throw cause;
+          });
+        if (!mounted.current) return;
+        if (refreshAgain.current) continue;
+        setDiscovery(nextDiscovery);
+        setDashboard(nextDashboard);
+        setQuality(nextQuality);
+        setCollection(nextCollection);
+      } while (refreshAgain.current);
+    })();
+    refreshInFlight.current = operation;
+    try {
+      await operation;
+    } finally {
+      refreshInFlight.current = null;
+    }
   }, []);
 
   useEffect(() => {
     let active = true;
+    mounted.current = true;
     refresh().catch((cause: unknown) => {
       if (active) {
         setError(describeError(cause));
@@ -139,8 +170,44 @@ export default function App() {
     });
     return () => {
       active = false;
+      mounted.current = false;
     };
   }, [refresh]);
+
+  useEffect(() => {
+    if (busySourceId !== null || rebuilding || refreshing || settingAutoImport) return;
+    let active = true;
+    let pending = false;
+    const timer = window.setInterval(async () => {
+      if (!active || pending) return;
+      pending = true;
+      try {
+        await refresh();
+        if (active) setError(null);
+      } catch (cause: unknown) {
+        if (active) setError(describeError(cause));
+      } finally {
+        pending = false;
+      }
+    }, 10_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [refresh, busySourceId, rebuilding, refreshing, settingAutoImport]);
+
+  async function handleAutoImport(enabled: boolean) {
+    setError(null);
+    setStatus(null);
+    setSettingAutoImport(true);
+    try {
+      const result = await setCodexAutoImport(enabled);
+      await refresh();
+      setCollection(result);
+      setStatus(enabled ? 'Automatic collection is enabled for existing and new Codex sessions.' : 'New Codex sessions will need approval. Previously approved sessions keep updating automatically.');
+    } catch (cause: unknown) {
+      setError(describeError(cause));
+    } finally {
+      setSettingAutoImport(false);
+    }
+  }
 
   async function handleRefresh() {
     setError(null);
@@ -161,8 +228,10 @@ export default function App() {
     setBusySourceId(sourceId);
     try {
       const result = await approveSource(sourceId);
+      await refresh();
+      const outcome = await rescanSource(sourceId);
       setStatus(
-        `${result.display_name} is ${result.state}. Choose "Rescan source" to import its events.`,
+        `${result.display_name} is ${result.state}. ${describeImport(outcome)} Usage will update automatically.`,
       );
       await refresh();
     } catch (cause: unknown) {
@@ -203,7 +272,7 @@ export default function App() {
   }
 
   const loading = discovery === null && dashboard === null && quality === null && error === null;
-  const actionsDisabled = busySourceId !== null || rebuilding || refreshing || loading;
+  const actionsDisabled = busySourceId !== null || rebuilding || refreshing || settingAutoImport || loading;
   const sources = discovery?.providers.flatMap((provider) => provider.sources) ?? [];
   const approvedCount = sources.filter((source) => source.scan_supported && RESCANNABLE_STATES.has(source.state)).length;
   const detectedCount = discovery?.providers.filter((provider) => provider.evidence_codes.some((code) => code !== 'discovery_error')).length ?? 0;
@@ -247,6 +316,7 @@ export default function App() {
           <div>
             <h1>Your usage, in focus.</h1>
             <p className="app__tagline">A clear view of your coding agents. Everything stays on this machine.</p>
+            {collection ? <p className="sync-status"><span className="status-dot" />Auto sync every {collection.scan_interval_seconds} seconds{collection.last_scan_at ? ` · Last checked ${formatTimestamp(collection.last_scan_at)}` : ''}</p> : null}
           </div>
           <button type="button" className="button button--secondary" onClick={handleRefresh} disabled={actionsDisabled} aria-busy={refreshing}>
             <Icon name="refresh" className={refreshing ? 'is-spinning' : ''} />Refresh data
@@ -255,6 +325,7 @@ export default function App() {
 
         {error !== null ? <p className="notice notice--error" role="alert"><Icon name="info" />{error}</p> : null}
         {status !== null ? <p className="notice notice--success" role="status"><Icon name="check" />{status}</p> : null}
+        {collection && collection.failed_source_count > 0 ? <p className="notice notice--error" role="alert"><Icon name="info" />Automatic sync could not read {collection.failed_source_count} sources. It will retry on the next scan.</p> : null}
         {loading ? (
           <div className="loading-state" aria-live="polite" aria-busy="true">
             <Icon name="refresh" className="is-spinning" />Reading local provider data…
@@ -291,7 +362,7 @@ export default function App() {
             {dashboard.event_count === 0 ? (
               <div className="getting-started">
                 <span className="getting-started__icon"><Icon name="sources" /></span>
-                <div><strong>Your first import starts here</strong><p>Approve a supported local source, then rescan it to see your usage.</p></div>
+                <div><strong>Your first import starts here</strong><p>Approve a local source or enable automatic collection to start seeing your usage.</p></div>
                 <a className="button button--secondary" href="#local-sources" onClick={() => setActiveSection('local-sources')}>View local sources<Icon name="arrow" /></a>
               </div>
             ) : null}
@@ -306,7 +377,7 @@ export default function App() {
             </div>
             <div className="provider-grid">
               {providers.map((provider) => (
-                <ProviderCard key={provider.connector_id} provider={provider} busySourceId={busySourceId} actionsDisabled={actionsDisabled} onApprove={handleApprove} onRescan={handleRescan} />
+                <ProviderCard key={provider.connector_id} provider={provider} busySourceId={busySourceId} actionsDisabled={actionsDisabled} onApprove={handleApprove} onRescan={handleRescan} autoImportEnabled={collection?.codex_auto_import} onAutoImportChange={handleAutoImport} />
               ))}
             </div>
             <p className="source-disclaimer"><Icon name="info" />Codex supports usage imports. Claude Code and Hermes are detection-only for now.</p>

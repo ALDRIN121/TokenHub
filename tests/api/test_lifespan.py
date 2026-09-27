@@ -15,9 +15,9 @@ from tokenhub.settings import TokenHubSettings
 
 from tests.api.conftest import ORIGIN, codex_id
 
-HEAD_REVISION = "0003_source_trust_and_quality"
+HEAD_REVISION = "0004_auto_import_roots"
 EXPECTED_TABLES = frozenset(
-    {"alembic_version", "sources", "usage_events", "sync_cursors", "import_runs"}
+    {"alembic_version", "sources", "usage_events", "sync_cursors", "import_runs", "auto_import_roots"}
 )
 
 
@@ -57,10 +57,10 @@ def test_restart_recovers_a_durable_approval_through_rediscovery(
         # Rediscovery must not reset the approval persisted in the first run.
         assert second.get("/api/v1/discovery").status_code == 200
         freshness = _freshness_by_source(second)
-        assert freshness[source_id]["state"] == "approved"
+        assert freshness[source_id]["state"] == "healthy"
         assert second.post(f"/api/v1/sources/{source_id}/rescan", headers=ORIGIN).json()[
             "inserted_events"
-        ] == 1
+        ] == 0
         assert _freshness_by_source(second)[source_id]["state"] == "healthy"
 
 

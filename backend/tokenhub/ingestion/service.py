@@ -43,7 +43,7 @@ class IngestionService:
         # The repository validates containment and writes paths in its approval transaction.
         return self.source_repository.approve(source_id)
 
-    def rescan(self, source_id: str) -> ImportOutcome:
+    def rescan(self, source_id: str, *, record_unchanged: bool = True) -> ImportOutcome:
         source = self._source(source_id)
         connector = self._supported_connector(source)
         if (
@@ -85,6 +85,10 @@ class IngestionService:
             state=result.state,
             partial_final_record=result.partial_final_record,
             unsupported_records=result.unsupported_records,
+            record_import=(
+                record_unchanged or result.cursor != cursor
+                or result.state.value != source.state
+            ),
         )
 
     def rebuild(self) -> RebuildOutcome:

@@ -76,3 +76,10 @@ export interface DataQualityResponse {
   quality_counts: Record<string, number>;
   source_freshness: SourceFreshness[];
 }
+
+export interface CollectionStatus {
+  scan_interval_seconds: number;
+  codex_auto_import: boolean;
+  last_scan_at: string | null;
+  failed_source_count: number;
+}

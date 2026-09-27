@@ -32,6 +32,8 @@ interface ProviderCardProps {
   actionsDisabled?: boolean;
   onApprove: (sourceId: string) => void;
   onRescan: (sourceId: string) => void;
+  autoImportEnabled?: boolean;
+  onAutoImportChange?: (enabled: boolean) => void;
 }
 
 /**
@@ -39,7 +41,7 @@ interface ProviderCardProps {
  * itself allows them: the connector must support scanning and the source state
  * must permit the action. Otherwise the card is read-only information.
  */
-export function ProviderCard({ provider, busySourceId, actionsDisabled = false, onApprove, onRescan }: ProviderCardProps) {
+export function ProviderCard({ provider, busySourceId, actionsDisabled = false, onApprove, onRescan, autoImportEnabled = false, onAutoImportChange }: ProviderCardProps) {
   const evidence = provider.evidence_codes.map(evidenceLabel);
   const evidenceText = evidence.length > 0 ? evidence.join(', ') : 'none recorded';
   const supported = provider.sources.some((source) => source.scan_supported);
@@ -56,8 +58,17 @@ export function ProviderCard({ provider, busySourceId, actionsDisabled = false, 
         <span className={`badge ${detectionFailed ? 'badge--warning' : supported ? 'badge--success' : 'badge--neutral'}`}>{stateLabel}</span>
       </div>
       <p className="provider-card__description">
-        {detectionFailed ? 'This installation could not be checked. Choose Refresh data to retry detection.' : supported ? 'Import token counts from local sessions. You decide when to read them.' : detected ? 'Installation detected. Usage imports are not supported yet.' : 'No installation detected on this machine.'}
+        {detectionFailed ? 'This installation could not be checked. Choose Refresh data to retry detection.' : supported ? 'Approved session usage updates automatically on this device.' : detected ? 'Installation detected. Usage imports are not supported yet.' : 'No installation detected on this machine.'}
       </p>
+
+      {provider.connector_id === 'codex-local' && supported && onAutoImportChange ? (
+        <div className="provider-card__automation">
+          <p className="provider-card__note">{autoImportEnabled ? 'Existing and new Codex sessions are included automatically.' : 'Approve this session folder once to automatically include new Codex sessions.'}</p>
+          <button type="button" className="button button--secondary" disabled={actionsDisabled} onClick={() => onAutoImportChange(!autoImportEnabled)}>
+            <Icon name="refresh" />{autoImportEnabled ? 'Stop including new sessions' : 'Include new sessions automatically'}
+          </button>
+        </div>
+      ) : null}
 
       {provider.sources.length === 0 ? (
         <p className="provider-card__note">

@@ -1,5 +1,6 @@
 import type {
   ApprovalResult,
+  CollectionStatus,
   DashboardSummary,
   DataQualityResponse,
   DiscoveryResponse,
@@ -47,6 +48,14 @@ export function getDashboard(): Promise<DashboardSummary> {
 
 export function getDataQuality(): Promise<DataQualityResponse> {
   return request<DataQualityResponse>('/data-quality');
+}
+
+export function getCollectionStatus(): Promise<CollectionStatus> {
+  return request<CollectionStatus>('/collection');
+}
+
+export function setCodexAutoImport(enabled: boolean): Promise<CollectionStatus> {
+  return request<CollectionStatus>(`/collection/codex/${enabled ? 'enable' : 'disable'}`, { method: 'POST' });
 }
 
 export function approveSource(sourceId: string): Promise<ApprovalResult> {

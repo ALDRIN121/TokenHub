@@ -8,7 +8,9 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
+from tokenhub.connectors.codex import PARSER_VERSION
 from tokenhub.database.models import (
+    AutoImportRootRecord,
     ImportRunRecord,
     SourceRecord,
     SyncCursorRecord,
@@ -152,6 +154,64 @@ class SourceRepository:
         with self.session.begin():
             self._source(source_id).state = state.value
 
+    def upgrade_codex_parser_versions(self) -> None:
+        """Update known old metadata while preserving durable approval identities."""
+        with self.session.begin():
+            self.session.execute(
+                update(SourceRecord)
+                .where(
+                    SourceRecord.connector_id == "codex-local",
+                    SourceRecord.provider == "codex",
+                    SourceRecord.source_type == "jsonl",
+                    SourceRecord.scan_supported.is_(True),
+                    SourceRecord.parser_version == "codex-jsonl-v1",
+                )
+                .values(parser_version=PARSER_VERSION)
+            )
+
+    def enable_auto_import(self, candidate: SourceDescriptor) -> None:
+        """Grant only a discovered Codex root, pinned to its filesystem identity."""
+        if (
+            candidate.connector_id != "codex-local"
+            or candidate.provider.value != "codex"
+            or not candidate.scan_supported
+            or candidate.approved_root_device is None
+            or candidate.approved_root_inode is None
+        ):
+            raise ValueError("automatic imports require a supported Codex source")
+        validate_source_path(
+            candidate.canonical_path,
+            candidate.approved_root,
+            (candidate.approved_root_device, candidate.approved_root_inode),
+        )
+        values = {
+            "connector_id": candidate.connector_id,
+            "approved_root": str(candidate.approved_root),
+            "approved_root_device": candidate.approved_root_device,
+            "approved_root_inode": candidate.approved_root_inode,
+        }
+        with self.session.begin():
+            self.session.execute(
+                insert(AutoImportRootRecord).values(**values).on_conflict_do_update(
+                    index_elements=["connector_id"], set_=values
+                )
+            )
+
+    def auto_import_roots(self) -> list[AutoImportRootRecord]:
+        with self.session.begin():
+            roots = list(self.session.scalars(select(AutoImportRootRecord)))
+            for root in roots:
+                self.session.expunge(root)
+            return roots
+
+    def disable_auto_import(self, connector_id: str) -> None:
+        with self.session.begin():
+            self.session.execute(
+                delete(AutoImportRootRecord).where(
+                    AutoImportRootRecord.connector_id == connector_id
+                )
+            )
+
 
 class UsageRepository:
     """Persistence for normalized events, scan cursors, and import audit records."""
@@ -167,6 +227,7 @@ class UsageRepository:
         state: SourceState | None = None,
         partial_final_record: bool = False,
         unsupported_records: int = 0,
+        record_import: bool = True,
     ) -> ImportOutcome:
         if any(event.source_id != cursor.source_id for event in events):
             raise ValueError("scan events and cursor must belong to the same source")
@@ -216,15 +277,16 @@ class UsageRepository:
                     },
                 )
             )
-            self.session.add(
-                ImportRunRecord(
-                    source_id=cursor.source_id,
-                    inserted_events=inserted_events,
-                    duplicate_events=len(events) - inserted_events,
-                    partial_final_record=partial_final_record,
-                    unsupported_records=unsupported_records,
+            if record_import or inserted_events:
+                self.session.add(
+                    ImportRunRecord(
+                        source_id=cursor.source_id,
+                        inserted_events=inserted_events,
+                        duplicate_events=len(events) - inserted_events,
+                        partial_final_record=partial_final_record,
+                        unsupported_records=unsupported_records,
+                    )
                 )
-            )
             if state is not None:
                 state_result = self.session.execute(
                     update(SourceRecord)

@@ -22,6 +22,12 @@ function refusesWithoutOrigin(request: Request): Response | null {
 }
 
 export const handlers = [
+  http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: false, last_scan_at: null, failed_source_count: 0 })),
+  http.post('/api/v1/collection/codex/:action', ({ request, params }) => {
+    const refusal = refusesWithoutOrigin(request);
+    if (refusal !== null) return refusal;
+    return HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: params.action === 'enable', last_scan_at: null, failed_source_count: 0 });
+  }),
   http.get('/api/v1/discovery', () => HttpResponse.json(discoveryFixture)),
   http.get('/api/v1/dashboard', () => HttpResponse.json(dashboardFixture)),
   http.get('/api/v1/data-quality', () => HttpResponse.json(dataQualityFixture)),

@@ -36,6 +36,36 @@ cd frontend && npm ci && npm run build      # writes frontend/dist
 
 `frontend/dist` is mounted at `/` when it exists; the API works without it.
 
+## Automatic collection
+
+While TokenHub is running, it scans approved Codex sessions at startup and every
+30 seconds. The dashboard refreshes itself every 10 seconds. Approving a source
+in the UI also starts its first import immediately; manual rescanning is available
+for troubleshooting. Unchanged files are skipped, and repeated scans do not
+increase totals. Automatic scans of unchanged data do not create extra
+import-history rows, including after restarting TokenHub.
+
+Choose **Include new sessions automatically** on the Codex card to approve the discovered
+session folder once and include both existing and future sessions automatically.
+This consent survives restarts and is pinned to the folder's device and inode;
+replacing the folder or redirecting it through a symlink cannot authorize another
+location. **Stop including new sessions** removes that folder consent; previously
+approved files keep updating. Without folder consent, new files require approval.
+
+`GET /api/v1/collection` reports the scan interval, folder-consent state, last
+completed scan, and failed-source count. Same-origin `POST` requests to
+`/api/v1/collection/codex/enable` and `/disable` change consent. Responses contain
+no private paths. Failed sources are retried without preventing other sources
+from updating, and collection runs even when the dashboard is closed.
+
+Only per-response `token_usage_record.payload.usage` values contribute to totals.
+Known session messages are skipped. Cumulative token snapshots, malformed records,
+and unknown usage structures remain visible as unsupported records; cumulative
+snapshots are excluded from totals to avoid double counting. Workload is
+input plus output, with cached input and reasoning already included in those
+counts. Token counts are not billing amounts. The UI uses K/M/B abbreviations
+and shows the exact count on hover.
+
 ## Discovery and approval
 
 `GET /api/v1/discovery` reports each provider's display name, connection state,

@@ -1,7 +1,7 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import App from './App';
 import { server } from './test/server';
@@ -13,6 +13,108 @@ import {
 } from './test/fixtures';
 
 describe('TokenHub client', () => {
+  it('waits for all requests in a failed batch before starting another refresh', async () => {
+    const timers = vi.spyOn(window, 'setInterval');
+    const fetches = vi.spyOn(globalThis, 'fetch');
+    let finish!: () => void;
+    let failedResponse = false;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const view = render(<App />);
+    let polling: Promise<void> | undefined;
+    try {
+      await screen.findByText('125');
+      server.use(
+        http.get('/api/v1/discovery', () => {
+          failedResponse = true;
+          return new HttpResponse(null, { status: 503 });
+        }),
+        http.get('/api/v1/dashboard', async () => {
+          await pending;
+          return HttpResponse.json(dashboardFixture);
+        }),
+      );
+      const call = timers.mock.calls.find(([, delay]) => delay === 10_000)!;
+      const initialCalls = fetches.mock.calls.length;
+      polling = (call[0] as () => Promise<void>)();
+      await waitFor(() => expect(failedResponse).toBe(true));
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh data' }));
+      expect(fetches.mock.calls.length - initialCalls).toBe(4);
+    } finally {
+      finish();
+      await act(async () => { await polling; });
+      view.unmount();
+      timers.mockRestore();
+      fetches.mockRestore();
+    }
+  });
+
+  it('does not overlap a manual refresh with a pending automatic refresh', async () => {
+    const timers = vi.spyOn(window, 'setInterval');
+    const fetches = vi.spyOn(globalThis, 'fetch');
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const view = render(<App />);
+    let polling: Promise<void> | undefined;
+    try {
+      await screen.findByText('125');
+      server.use(http.get('/api/v1/discovery', async () => {
+        await pending;
+        return HttpResponse.json(discoveryFixture);
+      }));
+      const call = timers.mock.calls.find(([, delay]) => delay === 10_000)!;
+      const initialCalls = fetches.mock.calls.length;
+      polling = (call[0] as () => Promise<void>)();
+      await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh data' }));
+      expect(fetches.mock.calls.length - initialCalls).toBe(4);
+    } finally {
+      finish();
+      await act(async () => { await polling; });
+      view.unmount();
+      timers.mockRestore();
+      fetches.mockRestore();
+    }
+  });
+
+  it('updates displayed usage automatically and stops polling on unmount', async () => {
+    const timers = vi.spyOn(window, 'setInterval');
+    const cleanup = vi.spyOn(window, 'clearInterval');
+    let workload = 125;
+    server.use(http.get('/api/v1/dashboard', () => HttpResponse.json({ ...dashboardFixture, workload_tokens: workload })));
+    const view = render(<App />);
+    try {
+      await screen.findByText('125');
+      const call = timers.mock.calls.find(([, delay]) => delay === 10_000);
+      expect(call).toBeDefined();
+      workload = 10_000;
+      await act(async () => { await (call![0] as () => Promise<void>)(); });
+      expect(screen.getByText('10K')).toHaveAttribute('title', '10,000');
+      view.unmount();
+      expect(cleanup).toHaveBeenCalled();
+    } finally {
+      view.unmount();
+      timers.mockRestore();
+      cleanup.mockRestore();
+    }
+  });
+
+  it('starts importing immediately after approving a source', async () => {
+    let scans = 0;
+    server.use(http.post('/api/v1/sources/:sourceId/rescan', () => {
+      scans += 1;
+      return HttpResponse.json(importOutcomeFixture);
+    }));
+    render(<App />);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Approve source' }));
+    await screen.findByRole('status');
+    expect(scans).toBe(1);
+  });
+
+  it('offers explicit consent to automatically include future Codex sessions', async () => {
+    render(<App />);
+    await userEvent.setup().click(await screen.findByRole('button', { name: 'Include new sessions automatically' }));
+    expect(await screen.findByRole('status')).toHaveTextContent(/existing and new Codex sessions/);
+  });
+
   it('does not turn a failed detection into a missing installation', async () => {
     server.use(http.get('/api/v1/discovery', () => HttpResponse.json({
       providers: [{ connector_id: 'codex-local', display_name: 'OpenAI Codex', provider: 'codex', state: 'error', confidence: 'low', evidence_codes: ['discovery_error'], sources: [] }],

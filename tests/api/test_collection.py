@@ -1,0 +1,262 @@
+"""Automatic collection uses synthetic sources and durable approval boundaries."""
+
+import time
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+from tokenhub.app import create_app
+from tokenhub.connectors.protocol import DiscoveryContext
+from tokenhub.settings import TokenHubSettings
+
+from tests.api.conftest import ORIGIN, codex_id
+from tests.service_support import token_record
+
+
+def test_collection_imports_approved_appends_and_skips_unchanged_files(
+    client: TestClient, tmp_path: Path
+) -> None:
+    source_id = codex_id(client)
+    client.post(f"/api/v1/sources/{source_id}/approve", headers=ORIGIN)
+    container = client.app.state.container
+    container.collect()
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+    with (tmp_path / 'home/.codex/sessions/synthetic.jsonl').open('ab') as stream:
+        stream.write(token_record(2, input_tokens=10, output_tokens=5))
+    container.collect()
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 140
+    runs = container.services.session.execute(
+        text('select count(*) from import_runs')
+    ).scalar()
+    container.services.session.rollback()
+    container.collect()
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 140
+    again = container.services.session.execute(
+        text('select count(*) from import_runs')
+    ).scalar()
+    container.services.session.rollback()
+    assert again == runs
+
+
+def test_collection_does_not_import_unapproved_sources(client: TestClient) -> None:
+    client.app.state.container.collect()
+    assert client.get('/api/v1/dashboard').json()['event_count'] == 0
+
+
+def test_folder_consent_covers_new_sessions_and_survives_restart(
+    client: TestClient, tmp_path: Path
+) -> None:
+    enabled = client.post('/api/v1/collection/codex/enable', headers=ORIGIN)
+    assert enabled.status_code == 200
+    assert enabled.json()['codex_auto_import'] is True
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+    (tmp_path / 'home/.codex/sessions/new.jsonl').write_bytes(
+        token_record(1, input_tokens=20, output_tokens=10)
+    )
+    restarted = create_app(client.app.state.container.settings)
+    restarted.state.container.discovery_context = DiscoveryContext(
+        tmp_path / 'home', {}, lambda _: None
+    )
+    with TestClient(restarted, base_url='http://127.0.0.1:7432') as second:
+        assert second.get('/api/v1/collection').json()['codex_auto_import'] is True
+        assert second.get('/api/v1/dashboard').json()['workload_tokens'] == 155
+
+
+def test_folder_consent_does_not_follow_a_replaced_root(
+    client: TestClient, tmp_path: Path
+) -> None:
+    assert client.post('/api/v1/collection/codex/enable', headers=ORIGIN).status_code == 200
+    sessions = tmp_path / 'home/.codex/sessions'
+    sessions.rename(tmp_path / 'original-sessions')
+    sessions.mkdir()
+    (sessions / 'unapproved.jsonl').write_bytes(
+        token_record(1, input_tokens=500, output_tokens=500)
+    )
+    client.app.state.container.collect()
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+    views = client.get('/api/v1/discovery').json()['providers'][1]['sources']
+    assert views[0]['state'] == 'discovered'
+
+
+def test_collection_enable_requires_origin(client: TestClient) -> None:
+    assert client.post('/api/v1/collection/codex/enable').status_code == 403
+    assert client.get('/api/v1/dashboard').json()['event_count'] == 0
+
+
+def test_background_worker_updates_without_a_manual_scan(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    source = home / '.codex/sessions/test.jsonl'
+    source.parent.mkdir(parents=True)
+    source.write_bytes(token_record(1, input_tokens=100, output_tokens=25))
+    settings = TokenHubSettings(
+        home_directory=home, data_directory=tmp_path / 'data', scan_interval_seconds=0.05
+    )
+    app = create_app(settings)
+    app.state.container.discovery_context = DiscoveryContext(home, {}, lambda _: None)
+    with TestClient(app, base_url='http://127.0.0.1:7432') as client:
+        source_id = codex_id(client)
+        client.post(f'/api/v1/sources/{source_id}/approve', headers=ORIGIN)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if client.get('/api/v1/dashboard').json()['workload_tokens'] == 125:
+                break
+            time.sleep(0.01)
+        assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+    assert app.state.container.collection_thread is None
+
+
+def test_unchanged_partial_tail_does_not_repeat_import_history(
+    client: TestClient, tmp_path: Path
+) -> None:
+    source_id = codex_id(client)
+    client.post(f'/api/v1/sources/{source_id}/approve', headers=ORIGIN)
+    source = tmp_path / 'home/.codex/sessions/synthetic.jsonl'
+    with source.open('ab') as stream:
+        stream.write(b'{"ordinal":2')
+    container = client.app.state.container
+    container.collect()
+    runs = container.services.session.execute(text('select count(*) from import_runs')).scalar()
+    container.services.session.rollback()
+    container.collect()
+    again = container.services.session.execute(text('select count(*) from import_runs')).scalar()
+    container.services.session.rollback()
+    assert again == runs
+
+
+def test_disabling_folder_consent_keeps_new_sessions_unapproved(
+    client: TestClient, tmp_path: Path
+) -> None:
+    client.post('/api/v1/collection/codex/enable', headers=ORIGIN)
+    disabled = client.post('/api/v1/collection/codex/disable', headers=ORIGIN)
+    assert disabled.json()['codex_auto_import'] is False
+    (tmp_path / 'home/.codex/sessions/new.jsonl').write_bytes(
+        token_record(1, input_tokens=900, output_tokens=100)
+    )
+    client.app.state.container.collect()
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+
+
+def test_restart_reparses_old_quality_without_duplicating_totals(
+    client: TestClient, tmp_path: Path
+) -> None:
+    source_id = codex_id(client)
+    source = tmp_path / 'home/.codex/sessions/synthetic.jsonl'
+    source.write_bytes(b'{"type":"session_meta","payload":{}}\n' + source.read_bytes())
+    client.post(f'/api/v1/sources/{source_id}/approve', headers=ORIGIN)
+    container = client.app.state.container
+    container.collect()
+    with container.services.session.begin():
+        container.services.session.execute(text(
+            "update sync_cursors set parser_version='codex-jsonl-v1', source_unsupported_records=1"
+        ))
+    restarted = create_app(container.settings)
+    restarted.state.container.discovery_context = DiscoveryContext(tmp_path / 'home', {}, lambda _: None)
+    with TestClient(restarted, base_url='http://127.0.0.1:7432') as second:
+        assert second.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+        freshness = second.get('/api/v1/data-quality').json()['source_freshness'][0]
+        assert freshness['unsupported_records'] == 0
+        assert freshness['state'] == 'healthy'
+
+
+def test_restart_does_not_add_unchanged_import_history(client: TestClient, tmp_path: Path) -> None:
+    source_id = codex_id(client)
+    client.post(f'/api/v1/sources/{source_id}/approve', headers=ORIGIN)
+    container = client.app.state.container
+    container.collect()
+    runs = container.services.session.execute(text('select count(*) from import_runs')).scalar()
+    container.services.session.rollback()
+    restarted = create_app(container.settings)
+    restarted.state.container.discovery_context = DiscoveryContext(tmp_path / 'home', {}, lambda _: None)
+    with TestClient(restarted, base_url='http://127.0.0.1:7432'):
+        session = restarted.state.container.services.session
+        assert session.execute(text('select count(*) from import_runs')).scalar() == runs
+        session.rollback()
+
+
+def test_out_of_range_usage_does_not_break_collection_or_restart(
+    client: TestClient, tmp_path: Path
+) -> None:
+    source = tmp_path / 'home/.codex/sessions/oversized.jsonl'
+    source.write_bytes(token_record(1, input_tokens=2**63, output_tokens=0))
+    assert client.post('/api/v1/collection/codex/enable', headers=ORIGIN).status_code == 200
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+    restarted = create_app(client.app.state.container.settings)
+    restarted.state.container.discovery_context = DiscoveryContext(tmp_path / 'home', {}, lambda _: None)
+    with TestClient(restarted, base_url='http://127.0.0.1:7432') as second:
+        assert second.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+        assert any(source['unsupported_records'] == 1
+                   for source in second.get('/api/v1/data-quality').json()['source_freshness'])
+
+
+def test_unexpected_source_failure_does_not_starve_other_sources(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client.post('/api/v1/collection/codex/enable', headers=ORIGIN)
+    failed_id = codex_id(client)
+    source = tmp_path / 'home/.codex/sessions/other.jsonl'
+    source.write_bytes(token_record(1, input_tokens=20, output_tokens=5))
+    container = client.app.state.container
+    original_rescan = container.services.ingestion.rescan
+
+    def rescan(source_id: str, **kwargs: object):
+        if source_id == failed_id:
+            raise RuntimeError('synthetic unexpected parser failure')
+        return original_rescan(source_id, **kwargs)
+
+    with (tmp_path / 'home/.codex/sessions/synthetic.jsonl').open('ab') as stream:
+        stream.write(token_record(2, input_tokens=10, output_tokens=5))
+    monkeypatch.setattr(container.services.ingestion, 'rescan', rescan)
+    container.collect()
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 150
+    assert client.get('/api/v1/collection').json()['failed_source_count'] == 1
+    monkeypatch.setattr(container.services.ingestion, 'rescan', original_rescan)
+    container.collect()
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 165
+    assert client.get('/api/v1/collection').json()['failed_source_count'] == 0
+
+
+def test_retry_recovers_when_source_identity_is_unchanged(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tokenhub.ingestion.collection as collection_module
+
+    source_id = codex_id(client)
+    client.post(f'/api/v1/sources/{source_id}/approve', headers=ORIGIN)
+    container = client.app.state.container
+    container.collect()
+    with monkeypatch.context() as patch:
+        def unavailable(*args: object, **kwargs: object) -> int:
+            raise PermissionError('synthetic temporary permission failure')
+        patch.setattr(collection_module, 'open_source_path', unavailable)
+        container.collect()
+    assert client.get('/api/v1/collection').json()['failed_source_count'] == 1
+    container.collect()
+    assert client.get('/api/v1/data-quality').json()['source_freshness'][0]['state'] == 'healthy'
+    assert client.get('/api/v1/collection').json()['failed_source_count'] == 0
+
+
+def test_stored_parser_upgrade_does_not_need_rediscovery(client: TestClient, tmp_path: Path) -> None:
+    source_id = codex_id(client)
+    client.post(f'/api/v1/sources/{source_id}/approve', headers=ORIGIN)
+    container = client.app.state.container
+    container.collect()
+    with container.services.session.begin():
+        container.services.session.execute(text(
+            "update sources set parser_version='codex-jsonl-v1'"
+        ))
+        container.services.session.execute(text(
+            "update sync_cursors set parser_version='codex-jsonl-v1', source_unsupported_records=1"
+        ))
+    empty_home = tmp_path / 'empty-home'
+    empty_home.mkdir()
+    restarted = create_app(container.settings)
+    restarted.state.container.discovery_context = DiscoveryContext(empty_home, {}, lambda _: None)
+    with TestClient(restarted, base_url='http://127.0.0.1:7432') as second:
+        assert second.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+        freshness = second.get('/api/v1/data-quality').json()['source_freshness'][0]
+        assert freshness['state'] == 'healthy'
+        services = restarted.state.container.services
+        assert services.source_repository.get(source_id).parser_version == 'codex-jsonl-v2'
+        assert services.usage_repository.current_cursor(source_id).parser_version == 'codex-jsonl-v2'
+        assert freshness['unsupported_records'] == 0

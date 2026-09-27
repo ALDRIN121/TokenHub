@@ -40,7 +40,7 @@ def test_dashboard_keeps_breakdowns_separate_and_reports_quality(
     freshness = next(s for s in summary.source_freshness if s.source_id == source_id)
     assert freshness.latest_event_at == datetime(2026, 9, 20, 10, tzinfo=UTC)
     assert freshness.source_mtime_ns == app_services.session_file.stat().st_mtime_ns
-    assert freshness.parser_version == "codex-jsonl-v1"
+    assert freshness.parser_version == "codex-jsonl-v2"
 
 
 def test_missing_values_stay_unknown_but_observed_zero_is_zero(

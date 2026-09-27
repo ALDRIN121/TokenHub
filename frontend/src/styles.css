@@ -85,6 +85,9 @@ h3 { font-size: 15px; font-weight: 650; letter-spacing: -.2px; }
 .metric-card__label { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13px; color: var(--text-muted); }
 .metric-card__label .icon { color: var(--accent); width: 19px; height: 19px; }
 .metric-card__value { margin: 15px 0 0; font-size: clamp(24px, 2.4vw, 36px); font-weight: 680; letter-spacing: -1px; line-height: 1.1; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.sync-status { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin: 10px 0 0; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.provider-card__automation { padding-bottom: 18px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
+.provider-card__automation .button { width: 100%; }
 .metric-card__note { margin: 10px 0 0; color: var(--text-muted); font-size: 12px; }
 .metric-card--featured { background: var(--accent-solid); border-color: var(--accent-solid); color: #fff; }
 .metric-card--featured .metric-card__label, .metric-card--featured .metric-card__note, .metric-card--featured .icon { color: #c4e9e1; }

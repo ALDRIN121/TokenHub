@@ -5,6 +5,7 @@ import os
 import stat
 from pathlib import Path
 
+from tokenhub.connectors.codex import PARSER_VERSION
 from tokenhub.connectors.protocol import (
     ConnectorCapabilities,
     DetectionResult,
@@ -128,7 +129,7 @@ class CodexConnector:
                         path_fingerprint=fingerprint,
                         evidence_codes=("session_source_found",),
                         scan_supported=True,
-                        parser_version="codex-jsonl-v1",
+                        parser_version=PARSER_VERSION,
                         approved_root_device=approved_root_device,
                         approved_root_inode=approved_root_inode,
                     )
@@ -194,7 +195,7 @@ class CodexConnector:
                 source_id=source.source_id,
                 byte_offset=parsed.safe_byte_offset,
                 source_mtime_ns=parsed.source_mtime_ns,
-                parser_version=capabilities.parser_version or "codex-jsonl-v1",
+                parser_version=capabilities.parser_version or PARSER_VERSION,
                 prefix_fingerprint=parsed.safe_prefix_fingerprint,
                 source_unsupported_records=source_unsupported_records,
             ),
@@ -204,5 +205,5 @@ class CodexConnector:
 
     def capabilities(self) -> ConnectorCapabilities:
         return ConnectorCapabilities(
-            scan_supported=True, source_type="jsonl", parser_version="codex-jsonl-v1"
+            scan_supported=True, source_type="jsonl", parser_version=PARSER_VERSION
         )

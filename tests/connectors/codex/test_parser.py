@@ -1,4 +1,6 @@
+import json
 import os
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,6 +15,57 @@ from tokenhub.domain.models import (
 )
 
 FIXTURES = Path(__file__).parents[3] / "fixtures" / "codex"
+
+
+def test_non_usage_session_records_are_ignored_without_marking_usage_partial(tmp_path: Path) -> None:
+    path = tmp_path / "session.jsonl"
+    path.write_bytes(
+        b'{"type":"session_meta","payload":{"id":"synthetic"}}\n'
+        + b'{"type":"response_item","payload":{"content":"synthetic private text"}}\n'
+        + b'{"type":"event_msg","payload":{"type":"task_complete"}}\n'
+        + (FIXTURES / "normal.jsonl").read_bytes()
+    )
+    source = SourceDescriptor(
+        source_id="codex-local:synthetic", connector_id="codex-local", provider=Provider.CODEX,
+        display_name="Codex session", canonical_path=path, approved_root=tmp_path,
+        source_type="jsonl", path_fingerprint="synthetic",
+    )
+    result = parse_codex_jsonl(source, 0)
+    assert len(result.events) == 1
+    assert result.events[0].workload_tokens == 125
+    assert result.unsupported_records == 0
+
+
+@pytest.mark.parametrize("payload", [
+    {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 9999}}},
+    {"type": "token_count", "info": None},
+    {"type": "unknown_usage", "usage": {"input_tokens": 9999}},
+    None,
+])
+def test_usage_bearing_event_messages_remain_visible_as_unsupported(
+    tmp_path: Path, payload: object
+) -> None:
+    path = tmp_path / "session.jsonl"
+    path.write_bytes(
+        (FIXTURES / "normal.jsonl").read_bytes()
+        + json.dumps({"type": "event_msg", "payload": payload}).encode() + b"\n"
+    )
+    source = replace(synthetic_source("normal.jsonl"), canonical_path=path, approved_root=tmp_path)
+    result = parse_codex_jsonl(source, 0)
+    assert len(result.events) == 1
+    assert result.events[0].workload_tokens == 125
+    assert result.unsupported_records == 1
+
+
+def test_token_values_outside_storage_range_are_unsupported(tmp_path: Path) -> None:
+    from tests.service_support import token_record
+
+    path = tmp_path / "session.jsonl"
+    path.write_bytes(token_record(1, input_tokens=2**63, output_tokens=0))
+    source = replace(synthetic_source("normal.jsonl"), canonical_path=path, approved_root=tmp_path)
+    result = parse_codex_jsonl(source, 0)
+    assert result.events == []
+    assert result.unsupported_records == 1
 
 
 def synthetic_source(name: str) -> SourceDescriptor:
@@ -133,7 +186,7 @@ def test_parser_leaves_missing_breakdowns_unknown() -> None:
     assert event.cache_write_tokens is None
     assert event.reasoning_tokens is None
     assert event.quality is Quality.EXACT
-    assert event.parser_version == "codex-jsonl-v1"
+    assert event.parser_version == "codex-jsonl-v2"
 
 
 def test_parser_starts_at_the_provided_completed_line_offset() -> None:

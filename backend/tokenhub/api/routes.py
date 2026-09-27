@@ -146,6 +146,34 @@ def discovery(request: Request) -> dict[str, object]:
     }
 
 
+@router.get("/collection")
+def collection_status(request: Request) -> dict[str, object]:
+    container = container_for(request)
+    with container.lock:
+        return container.services.collection.status(container.settings.scan_interval_seconds)
+
+
+@router.post("/collection/codex/enable")
+def enable_codex_collection(request: Request) -> dict[str, object]:
+    """Explicitly include existing and future sources under the discovered root."""
+    container = container_for(request)
+    with container.lock:
+        try:
+            container.services.collection.enable_codex()
+        except Exception as error:
+            raise _service_failure(error) from error
+        return container.services.collection.status(container.settings.scan_interval_seconds)
+
+
+@router.post("/collection/codex/disable")
+def disable_codex_collection(request: Request) -> dict[str, object]:
+    """Stop automatically approving new sources; existing approvals remain."""
+    container = container_for(request)
+    with container.lock:
+        container.services.source_repository.disable_auto_import("codex-local")
+        return container.services.collection.status(container.settings.scan_interval_seconds)
+
+
 @router.post("/sources/{source_id}/approve")
 def approve_source(source_id: str, request: Request) -> dict[str, object]:
     """Approve reading one discovered source; requires a same-origin request."""

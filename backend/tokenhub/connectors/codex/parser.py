@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from tokenhub.connectors.codex import PARSER_VERSION
 from tokenhub.domain.models import (
     MeasurementType,
     Quality,
@@ -16,6 +17,16 @@ from tokenhub.domain.models import (
 from tokenhub.security.paths import open_source_path
 
 _MISSING = object()
+_MAX_TOKEN_VALUE = 2**63 - 1
+_NON_USAGE_RECORD_TYPES = frozenset({
+    "session_meta", "response_item", "turn_context", "compacted",
+    "world_state", "inter_agent_communication_metadata", "realtime_item",
+})
+_NON_USAGE_EVENT_TYPES = frozenset({
+    "task_started", "task_complete", "item_completed", "thread_settings_applied",
+    "turn_aborted", "thread_goal_updated", "user_message", "agent_message",
+    "agent_reasoning", "agent_reasoning_raw_content", "context_compacted",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +87,14 @@ def parse_codex_jsonl(
 
             safe_byte_offset += len(raw_line)
             prefix_hasher.update(raw_line)
-            event = _parse_completed_line(raw_line, source)
+            try:
+                record = json.loads(raw_line)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                unsupported_records += 1
+                continue
+            if _is_non_usage_record(record):
+                continue
+            event = _parse_usage_record(record, source)
             if event is None:
                 unsupported_records += 1
             else:
@@ -93,13 +111,9 @@ def parse_codex_jsonl(
     )
 
 
-def _parse_completed_line(
-    raw_line: bytes, source: SourceDescriptor
+def _parse_usage_record(
+    record: Any, source: SourceDescriptor
 ) -> UsageEvent | None:
-    try:
-        record = json.loads(raw_line)
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        return None
     if not isinstance(record, dict) or record.get("type") != "token_usage_record":
         return None
 
@@ -126,6 +140,8 @@ def _parse_completed_line(
         reasoning_tokens = _optional_token(usage, "reasoning_output_tokens")
     except ValueError:
         return None
+    if (input_total_tokens or 0) + (output_total_tokens or 0) > _MAX_TOKEN_VALUE:
+        return None
 
     return UsageEvent(
         connector_id=source.connector_id,
@@ -140,7 +156,23 @@ def _parse_completed_line(
         reasoning_tokens=reasoning_tokens,
         measurement_type=MeasurementType.DELTA,
         quality=Quality.EXACT,
-        parser_version="codex-jsonl-v1",
+        parser_version=PARSER_VERSION,
+    )
+
+
+def _is_non_usage_record(record: Any) -> bool:
+    if not isinstance(record, dict) or not isinstance(record.get("type"), str):
+        return False
+    if record["type"] in _NON_USAGE_RECORD_TYPES:
+        return True
+    payload = record.get("payload")
+    # Cumulative token_count snapshots cannot safely be added to per-response
+    # deltas. Keep those and unknown event schemas visible as unsupported.
+    return (
+        record["type"] == "event_msg"
+        and isinstance(payload, dict)
+        and isinstance(payload.get("type"), str)
+        and payload["type"] in _NON_USAGE_EVENT_TYPES
     )
 
 
@@ -166,8 +198,8 @@ def _optional_token(usage: dict[str, Any], field: str) -> int | None:
     value = usage.get(field, _MISSING)
     if value is _MISSING:
         return None
-    if type(value) is not int or value < 0:
-        raise ValueError(f"{field} must be a nonnegative integer")
+    if type(value) is not int or not 0 <= value <= _MAX_TOKEN_VALUE:
+        raise ValueError(f"{field} must fit a nonnegative storage integer")
     return value
 
 

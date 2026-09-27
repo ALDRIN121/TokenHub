@@ -40,7 +40,7 @@ export const discoveryFixture: DiscoveryResponse = {
           state: 'discovered',
           evidence_codes: ['session_source_found'],
           scan_supported: true,
-          parser_version: 'codex-jsonl-v1',
+          parser_version: 'codex-jsonl-v2',
         },
       ],
     },

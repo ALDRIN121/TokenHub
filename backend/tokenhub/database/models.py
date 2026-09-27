@@ -49,6 +49,17 @@ class UsageEventRecord(Base):
     parser_version: Mapped[str] = mapped_column(String, nullable=False)
 
 
+class AutoImportRootRecord(Base):
+    """Explicit consent to include future sources within one unchanged root."""
+
+    __tablename__ = "auto_import_roots"
+
+    connector_id: Mapped[str] = mapped_column(String, primary_key=True)
+    approved_root: Mapped[str] = mapped_column(String, nullable=False)
+    approved_root_device: Mapped[int] = mapped_column(Integer, nullable=False)
+    approved_root_inode: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class SyncCursorRecord(Base):
     __tablename__ = "sync_cursors"
 
