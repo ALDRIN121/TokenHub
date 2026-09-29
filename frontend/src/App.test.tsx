@@ -334,6 +334,29 @@ describe('TokenHub client', () => {
     expect(screen.getByRole('button', { name: 'Rebuild index' })).toBeDisabled();
   });
 
+  it('explains when saved conversations are in a format that cannot be read', async () => {
+    const base = discoveryFixture.providers[1];
+    server.use(http.get('/api/v1/discovery', () => HttpResponse.json({
+      providers: [{
+        ...base,
+        connector_id: 'antigravity-local',
+        provider: 'antigravity',
+        display_name: 'Antigravity',
+        state: 'discovered',
+        confidence: 'medium',
+        evidence_codes: ['known_root_exists', 'unsupported_session_format'],
+        sources: [],
+      }],
+    })));
+    render(<App />);
+
+    const card = await screen.findByRole('article', { name: 'Antigravity' });
+    expect(within(card).getByText(/saved conversations use a file format TokenHub cannot read yet/)).toBeInTheDocument();
+    expect(within(card).getByText(/saved conversations were found, but not in a format TokenHub can read/)).toBeInTheDocument();
+    expect(within(card).queryByText(/No local source was found/)).not.toBeInTheDocument();
+    expect(within(card).queryByText(/Usage imports are not supported yet/)).not.toBeInTheDocument();
+  });
+
   it('shows a detected Codex source and makes approval available', async () => {
     server.use(http.get('/api/v1/discovery', () => HttpResponse.json(discoveryFixture)));
     render(<App />);

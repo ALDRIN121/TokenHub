@@ -2,6 +2,7 @@
 
 import hashlib
 import stat
+from pathlib import Path
 
 from tokenhub.connectors.antigravity import PARSER_VERSION
 from tokenhub.connectors.protocol import (
@@ -27,6 +28,22 @@ from tokenhub.security.paths import (
 )
 
 
+def _has_unreadable_conversations(root: Path) -> bool:
+    """Whether ``conversations`` holds saved chats in a format this connector cannot read.
+
+    The desktop app saves ``.pb`` protobuf files; only the ``.db`` databases carry
+    the counters TokenHub reads. Only names are listed, never file contents.
+    """
+    conversations = root / "conversations"
+    if not conversations.is_dir() or conversations.is_symlink():
+        return False
+    try:
+        with anchor_directory(conversations) as anchored:
+            return any(name.endswith(".pb") for name in list_directory(anchored.descriptor))
+    except (OSError, ValueError):
+        return False
+
+
 class AntigravityConnector:
     connector_id = "antigravity-local"
     display_name = "Antigravity"
@@ -42,6 +59,8 @@ class AntigravityConnector:
         sources = self.discover_sources(context)
         if sources:
             evidence.append("session_source_found")
+        elif _has_unreadable_conversations(root):
+            evidence.append("unsupported_session_format")
         return DetectionResult(
             connector_id=self.connector_id,
             display_name=self.display_name,

@@ -118,7 +118,8 @@ and reasoning counters from approved `~/.gemini/antigravity/conversations/*.db`
 files. It reads a snapshot of the database and its active journal without writing
 to the provider database. Antigravity's local metadata format is private, so
 unrecognized or inconsistent generations are excluded and reported as partial
-instead of estimated. `ANTIGRAVITY_HOME` can point to another Antigravity root.
+instead of estimated. Only `conversations/*.db` files are read; the desktop app's `.pb`
+conversation files are not, and TokenHub says so instead of showing an empty source. `ANTIGRAVITY_HOME` can point to another Antigravity root.
 
 ## Where TokenHub looks
 

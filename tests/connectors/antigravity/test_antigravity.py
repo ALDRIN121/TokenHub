@@ -87,6 +87,30 @@ def test_discovers_and_imports_verified_generation_usage(tmp_path: Path) -> None
     assert connector.scan(approved, result.cursor).events == ()
 
 
+def test_desktop_app_pb_conversations_are_reported_as_an_unreadable_format(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    conversations = home / '.gemini/antigravity/conversations'
+    conversations.mkdir(parents=True)
+    (conversations / 'one.pb').write_bytes(b'private conversation bytes')
+    result = AntigravityConnector().detect(DiscoveryContext(home, {}, lambda _: None))
+    assert result.sources == ()
+    assert result.state is SourceState.DISCOVERED
+    assert 'unsupported_session_format' in result.evidence_codes
+    # An unrecognized signal never raises how sure discovery is about the install.
+    assert result.confidence.value == 'medium'
+    assert 'private' not in str(result)
+
+
+def test_readable_databases_do_not_report_an_unreadable_format(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    conversations = home / '.gemini/antigravity/conversations'
+    _database(conversations / 'one.db')
+    (conversations / 'two.pb').write_bytes(b'x')
+    result = AntigravityConnector().detect(DiscoveryContext(home, {}, lambda _: None))
+    assert result.sources
+    assert 'unsupported_session_format' not in result.evidence_codes
+
+
 def test_does_not_follow_a_symlinked_conversation_database(tmp_path: Path) -> None:
     home = tmp_path / 'home'
     outside = tmp_path / 'outside.db'

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Antigravity's card now says when its saved conversations are in a format TokenHub
+  cannot read (the desktop app's `.pb` files) instead of "No local source was found".
+
 ## 0.1.2 - 2026-09-29
 
 ### Fixed
