@@ -28,9 +28,8 @@ from tokenhub.api.routes import router
 from tokenhub.security.http import is_loopback_host, is_same_origin
 from tokenhub.settings import TokenHubSettings
 
-#: Built UI location; mounted only when a build exists, so API tests and a
-#: source checkout do not need a frontend build.
-FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+#: The built UI is package data so installed wheels and source builds serve it.
+FRONTEND_DIST = Path(__file__).resolve().parent / "web"
 
 _READ_ONLY_METHODS = frozenset({"GET", "HEAD"})
 

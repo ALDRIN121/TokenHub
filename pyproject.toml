@@ -31,6 +31,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["backend"]
 
+[tool.setuptools.package-data]
+tokenhub = ["web/index.html", "web/favicon.svg", "web/assets/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

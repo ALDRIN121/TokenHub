@@ -18,6 +18,14 @@ def _settings(tmp_path: Path) -> TokenHubSettings:
     )
 
 
+def test_built_ui_is_an_installed_package_resource() -> None:
+    import tokenhub.app as app_module
+
+    package_directory = Path(app_module.__file__).resolve().parent
+    assert app_module.FRONTEND_DIST == package_directory / "web"
+    assert (app_module.FRONTEND_DIST / "index.html").is_file()
+
+
 def test_root_is_404_and_api_is_live_when_dist_is_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

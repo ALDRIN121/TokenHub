@@ -30,13 +30,14 @@ loopback-only by design:
   request's own origin; otherwise they are refused with `403`;
 - no CORS headers are ever added, and `X-Forwarded-*` headers are ignored.
 
-To serve the UI from the same process, build it first:
+The UI is bundled with the Python package. To refresh it while developing:
 
 ```bash
-cd frontend && npm ci && npm run build      # writes frontend/dist
+npm --prefix frontend ci
+npm --prefix frontend run build              # writes backend/tokenhub/web
 ```
 
-`frontend/dist` is mounted at `/` when it exists; the API works without it.
+The packaged UI is mounted at `/`; the API also works if the built UI is absent.
 
 ## Automatic collection
 

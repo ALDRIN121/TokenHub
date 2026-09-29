@@ -18,9 +18,7 @@ from alembic.config import Config
 
 from tokenhub.settings import TokenHubSettings
 
-BACKEND_DIRECTORY = Path(__file__).resolve().parents[2]
-ALEMBIC_INI = BACKEND_DIRECTORY / "alembic.ini"
-SCRIPT_LOCATION = BACKEND_DIRECTORY / "tokenhub" / "database" / "migrations"
+SCRIPT_LOCATION = Path(__file__).resolve().parent / "migrations"
 DATA_DIRECTORY_ENV = "TOKENHUB_DATA_DIRECTORY"
 
 
@@ -38,7 +36,7 @@ def _data_directory(path: Path) -> Iterator[None]:
 
 
 def migration_config() -> Config:
-    config = Config(str(ALEMBIC_INI))
+    config = Config()
     config.set_main_option("script_location", str(SCRIPT_LOCATION))
     return config
 

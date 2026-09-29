@@ -1,12 +1,12 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
-// The UI is served by the FastAPI process from frontend/dist, so every API call
+// The UI is served by the FastAPI process from the packaged web assets, so every API call
 // is a same-origin relative path and no dev proxy is required.
 export default defineConfig({
   plugins: [react()],
   build: {
-    outDir: 'dist',
+    outDir: '../backend/tokenhub/web',
     emptyOutDir: true,
   },
   test: {

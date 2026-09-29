@@ -21,6 +21,14 @@ EXPECTED_TABLES = frozenset(
 )
 
 
+def test_migrations_use_installed_package_resources() -> None:
+    from tokenhub.database.migrations import migration_config
+
+    config = migration_config()
+    assert config.config_file_name is None
+    assert Path(config.get_main_option("script_location")).is_dir()
+
+
 def test_create_app_has_no_side_effects_before_lifespan(api_app: FastAPI, tmp_path: Path) -> None:
     assert api_app.routes
     assert not (tmp_path / "data").exists()
