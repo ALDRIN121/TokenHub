@@ -21,6 +21,11 @@ on:
         description: Reviewed TestPyPI source archive SHA-256 (required for PyPI)
         required: false
         type: string
+      dry_run:
+        description: Verify release artifacts without publishing
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -102,6 +107,7 @@ jobs:
 
   publish:
     needs: prepare
+    if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.destination }}
     permissions:
