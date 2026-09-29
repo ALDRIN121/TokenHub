@@ -27,6 +27,7 @@ def test_record_invalid_data_is_ignored(tmp_path):
         json.dumps({"pid": 123, "port": 7432, "token": "bad"}),
         json.dumps({"pid": 123, "port": 7432, "token": "z" * 64}),
         json.dumps({"pid": True, "port": 7432, "token": "a" * 64}),
+        json.dumps({"pid": 123, "port": 7432, "token": "a" * 64, "started_at": "bad"}),
     ):
         path.write_text(content)
         assert read_record(tmp_path) is None

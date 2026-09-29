@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -18,6 +19,7 @@ class InstanceRecord:
     pid: int
     port: int
     token: str
+    started_at: float | None = None
 
 
 def _valid(record: InstanceRecord) -> bool:
@@ -28,6 +30,14 @@ def _valid(record: InstanceRecord) -> bool:
         and 1 <= record.port <= 65535
         and isinstance(record.token, str)
         and _TOKEN_PATTERN.fullmatch(record.token) is not None
+        and (
+            record.started_at is None
+            or (
+                type(record.started_at) in (int, float)
+                and math.isfinite(record.started_at)
+                and record.started_at > 0
+            )
+        )
     )
 
 

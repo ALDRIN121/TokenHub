@@ -304,6 +304,7 @@ def test_parser_normalizes_timestamp_offsets_to_utc(tmp_path: Path) -> None:
     assert result.events[0].timestamp.tzinfo is UTC
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX openat race injection")
 def test_parser_rejects_ancestor_swapped_after_approved_root_opens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -380,6 +381,7 @@ def test_parser_skips_timestamp_that_overflows_during_utc_conversion(tmp_path: P
     assert result.unsupported_records == 1
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX openat race injection")
 def test_parser_rejects_approved_root_ancestor_swapped_during_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

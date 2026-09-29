@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import secrets
 import urllib.error
@@ -15,7 +16,14 @@ _TIMEOUT_SECONDS = 0.5
 
 def _opener() -> urllib.request.OpenerDirector:
     # A local process must never be reached through configured HTTP proxies.
-    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _NoRedirect()
+    )
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
 
 
 def _origin(record: InstanceRecord) -> str:
@@ -38,7 +46,7 @@ def probe(record: InstanceRecord) -> bool:
         return isinstance(actual, str) and secrets.compare_digest(
             actual, proof(record.token, f"ready:{challenge}")
         )
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError, http.client.HTTPException):
         return False
 
 
@@ -57,5 +65,5 @@ def request_stop(record: InstanceRecord) -> bool:
     try:
         with _opener().open(request, timeout=_TIMEOUT_SECONDS) as response:
             return response.status == 202
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return False

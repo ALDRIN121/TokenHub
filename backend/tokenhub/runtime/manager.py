@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+import psutil
 from filelock import FileLock
 
 from tokenhub.runtime.client import probe, request_stop
@@ -26,6 +27,23 @@ _POLL_INTERVAL_SECONDS = 0.1
 
 def _url(port: int) -> str:
     return f"http://127.0.0.1:{port}/"
+
+
+def _process_start_time(pid: int) -> float:
+    return psutil.Process(pid).create_time()
+
+
+def _recorded_process_alive(record: InstanceRecord) -> bool:
+    """Treat uncertain ownership as live so a failed probe cannot orphan it."""
+    try:
+        process = psutil.Process(record.pid)
+        if record.started_at is not None and abs(process.create_time() - record.started_at) > 0.001:
+            return False
+        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except psutil.AccessDenied:
+        return True
 
 
 class RuntimeManager:
@@ -67,19 +85,28 @@ class RuntimeManager:
         self._prepare_directory()
         with FileLock(str(self.data_directory / "runtime.lock"), timeout=10):
             existing = read_record(self.data_directory)
-            if existing is not None and probe(existing):
-                if port is not None and port != existing.port:
-                    raise RuntimeError("Token Hub is already running on another port")
-                return _url(existing.port)
+            if existing is not None:
+                if probe(existing):
+                    if port is not None and port != existing.port:
+                        raise RuntimeError("Token Hub is already running on another port")
+                    return _url(existing.port)
+                if _recorded_process_alive(existing):
+                    raise RuntimeError(
+                        "Token Hub may still be running but is not responding; "
+                        f"check {self.data_directory / 'runtime.log'}"
+                    )
 
             selected_port = DEFAULT_PORT if port is None else port
             token = secrets.token_hex(32)
             log_path = self.data_directory / "runtime.log"
-            log_fd = os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-            if os.name == "posix":
-                os.chmod(log_path, 0o600)
             try:
-                with os.fdopen(log_fd, "ab", buffering=0) as log_file:
+                with os.fdopen(
+                    os.open(log_path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600),
+                    "ab",
+                    buffering=0,
+                ) as log_file:
+                    if os.name == "posix":
+                        os.fchmod(log_file.fileno(), 0o600)
                     child = subprocess.Popen(
                         [sys.executable, "-m", "tokenhub", "_serve", str(selected_port)],
                         env={**os.environ, "TOKENHUB_INTERNAL_CONTROL_TOKEN": token},
@@ -93,28 +120,42 @@ class RuntimeManager:
             except OSError as error:
                 raise RuntimeError(f"Could not start Token Hub; see {log_path}") from error
 
-            record = InstanceRecord(child.pid, selected_port, token)
-            write_record(self.data_directory, record)
-            deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
-            while True:
-                if child.poll() is not None:
-                    break
-                if probe(record):
-                    return _url(selected_port)
-                if time.monotonic() >= deadline:
-                    break
-                time.sleep(_POLL_INTERVAL_SECONDS)
+            record: InstanceRecord | None = None
+            ready = False
+            try:
+                record = InstanceRecord(child.pid, selected_port, token, _process_start_time(child.pid))
+                write_record(self.data_directory, record)
+                deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
+                while True:
+                    if child.poll() is not None:
+                        break
+                    if probe(record):
+                        ready = True
+                        return _url(selected_port)
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(_POLL_INTERVAL_SECONDS)
+                raise RuntimeError("server did not become ready")
+            except Exception as error:
+                raise RuntimeError(f"Token Hub did not start; see {log_path}") from error
+            finally:
+                if not ready:
+                    self._cleanup_failed_child(child, record)
 
-            self._cleanup_failed_child(child, record)
-            raise RuntimeError(f"Token Hub did not start; see {log_path}")
-
-    def _cleanup_failed_child(self, child: subprocess.Popen[bytes], record: InstanceRecord) -> None:
-        if child.poll() is None:
-            child.terminate()
+    def _cleanup_failed_child(
+        self, child: subprocess.Popen[bytes], record: InstanceRecord | None
+    ) -> None:
         try:
-            child.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            child.kill()
-            child.wait(timeout=2)
-        if read_record(self.data_directory) == record:
-            delete_record(self.data_directory)
+            if child.poll() is None:
+                try:
+                    child.terminate()
+                except ProcessLookupError:
+                    pass
+            try:
+                child.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=2)
+        finally:
+            if record is not None and read_record(self.data_directory) == record:
+                delete_record(self.data_directory)

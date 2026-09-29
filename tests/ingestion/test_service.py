@@ -125,6 +125,7 @@ def exercise_discovery_swap(
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX openat race injection")
 def test_discovery_root_swap_cannot_become_trusted_source(
     app_services: Services,
     tmp_path: Path,
@@ -138,6 +139,7 @@ def test_discovery_root_swap_cannot_become_trusted_source(
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX openat race injection")
 def test_discovery_ancestor_swap_cannot_become_trusted_source(
     app_services: Services,
     tmp_path: Path,
@@ -151,6 +153,7 @@ def test_discovery_ancestor_swap_cannot_become_trusted_source(
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX openat capability gate")
 def test_discovery_fails_closed_without_secure_directory_traversal(
     app_services: Services,
     monkeypatch: pytest.MonkeyPatch,

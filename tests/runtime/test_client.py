@@ -13,7 +13,7 @@ TOKEN = "a" * 64
 
 
 @contextmanager
-def control_server(*, forged=False, ready_status=200):
+def control_server(*, forged=False, ready_status=200, redirect_to=None, truncate=False):
     seen = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -26,10 +26,15 @@ def control_server(*, forged=False, ready_status=200):
             if self.path != "/api/v1/_runtime/ready":
                 self.send_error(404)
                 return
+            if redirect_to is not None:
+                self.send_response(302)
+                self.send_header("Location", redirect_to)
+                self.end_headers()
+                return
             body = json.dumps({"proof": "0" * 64 if forged else proof(TOKEN, f"ready:{challenge}")}).encode()
             self.send_response(ready_status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Length", str(len(body) + (10 if truncate else 0)))
             self.end_headers()
             self.wfile.write(body)
 
@@ -80,3 +85,15 @@ def test_connection_refusal_is_not_proof():
     record = InstanceRecord(123, port, TOKEN)
     assert not probe(record)
     assert not request_stop(record)
+
+
+def test_redirect_to_another_server_does_not_prove_selected_port():
+    with control_server() as (trusted_port, _):
+        destination = f"http://127.0.0.1:{trusted_port}/api/v1/_runtime/ready"
+        with control_server(redirect_to=destination) as (foreign_port, _):
+            assert not probe(InstanceRecord(123, foreign_port, TOKEN))
+
+
+def test_truncated_response_is_failed_proof_not_exception():
+    with control_server(truncate=True) as (port, _):
+        assert not probe(InstanceRecord(123, port, TOKEN))

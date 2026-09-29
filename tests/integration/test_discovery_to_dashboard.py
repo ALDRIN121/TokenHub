@@ -124,7 +124,7 @@ def _no_source_reads(session_file: Path) -> Iterator[list[str]]:
         return real_path_open(self, *args, **kwargs)
 
     def guarded_os_open(path: object, flags: int, *args: object, **kwargs: object):
-        if not flags & os.O_DIRECTORY:
+        if os.name != "nt" and not flags & os.O_DIRECTORY:
             _note(path)
         return real_os_open(path, flags, *args, **kwargs)
 

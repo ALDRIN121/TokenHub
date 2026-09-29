@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from tokenhub.security import windows_paths
+
 _SECURE_DIR_FD_TRAVERSAL = (
     os.open in os.supports_dir_fd
     and bool(getattr(os, "O_DIRECTORY", 0))
@@ -45,14 +47,18 @@ def anchor_directory(root: Path) -> Iterator[AnchoredDirectory]:
 
 def list_directory(descriptor: int) -> list[str]:
     """List names through an already anchored directory descriptor."""
+    if os.name == "nt":
+        return windows_paths.list_directory(descriptor)
     _require_secure_directory_enumeration()
     return os.listdir(descriptor)
 
 
 def stat_directory_entry(name: str, parent_descriptor: int) -> os.stat_result:
     """Inspect one direct child without following a symbolic link."""
-    _require_secure_directory_enumeration()
     _validate_child_name(name)
+    if os.name == "nt":
+        return windows_paths.stat_directory_entry(name, parent_descriptor)
+    _require_secure_directory_enumeration()
     return os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
 
 
@@ -90,8 +96,10 @@ def open_source_path(
     expected_root_identity: tuple[int, int] | None = None,
 ) -> int:
     """Open a regular source by no-follow traversal from ``/`` through ``root``."""
-    _require_secure_directory_traversal()
     relative_path = _lexical_relative_path(candidate, root)
+    if os.name == "nt":
+        return windows_paths.open_source_path(root, relative_path, expected_root_identity)
+    _require_secure_directory_traversal()
     root_descriptor = _open_absolute_directory(root)
     directory_descriptors = [root_descriptor]
     try:
@@ -137,6 +145,8 @@ def _require_secure_directory_enumeration() -> None:
 
 
 def _open_absolute_directory(root: Path) -> int:
+    if os.name == "nt":
+        return windows_paths.open_absolute_directory(root)
     _require_secure_directory_traversal()
     if not _is_absolute_clean_path(root):
         raise ValueError("approved root must be clean and absolute")
@@ -157,6 +167,10 @@ def _is_absolute_clean_path(path: Path) -> bool:
 
 
 def _open_directory(path: Path | str, parent_descriptor: int | None = None) -> int:
+    if os.name == "nt":
+        if parent_descriptor is None:
+            return windows_paths.open_absolute_directory(Path(path))
+        return windows_paths.open_directory_entry(str(path), parent_descriptor)
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     descriptor = os.open(path, flags, dir_fd=parent_descriptor)
     try:

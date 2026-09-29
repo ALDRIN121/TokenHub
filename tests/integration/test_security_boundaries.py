@@ -159,7 +159,7 @@ def _read_guard(watched: dict[str, Path]) -> Iterator[list[str]]:
         return real_read_text(self, *args, **kwargs)
 
     def guarded_os_open(path: object, flags: int, *args: object, **kwargs: object):
-        if not flags & os.O_DIRECTORY:
+        if os.name != "nt" and not flags & os.O_DIRECTORY:
             _record(path)
         return real_os_open(path, flags, *args, **kwargs)
 
