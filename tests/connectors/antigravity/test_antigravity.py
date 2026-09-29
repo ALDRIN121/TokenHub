@@ -1,6 +1,7 @@
 """Antigravity generation counters are read without persisting conversation text."""
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -87,13 +88,13 @@ def test_discovers_and_imports_verified_generation_usage(tmp_path: Path) -> None
     assert connector.scan(approved, result.cursor).events == ()
 
 
-def _scan_usage(tmp_path: Path, usage: bytes):
+def _scan_usage(tmp_path: Path, usage: bytes, case: str = 'case'):
     """Scan one generation whose usage message is exactly ``usage``."""
-    home = tmp_path / 'home'
+    home = tmp_path / case
     path = home / '.gemini/antigravity/conversations/conversation.db'
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.unlink(missing_ok=True)
-    with sqlite3.connect(path) as db:
+    path.parent.mkdir(parents=True)
+    # Close explicitly: on Windows an open handle blocks later cleanup of the file.
+    with closing(sqlite3.connect(path)) as db, db:
         db.execute('CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER)')
         db.execute('CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB)')
         blob = _bytes(1, _bytes(4, usage + _bytes(11, b'response-a')) + _bytes(19, b'gemini-test'))
@@ -131,8 +132,8 @@ def test_omitted_counters_do_not_relax_output_reconciliation(tmp_path: Path) -> 
 
 
 def test_a_usage_message_without_input_or_output_counters_stays_unsupported(tmp_path: Path) -> None:
-    assert _scan_usage(tmp_path, _number(3, 25) + _number(9, 25)).events == ()
-    assert _scan_usage(tmp_path, _number(1, 10) + _number(2, 100)).events == ()
+    assert _scan_usage(tmp_path, _number(3, 25) + _number(9, 25), 'no-input').events == ()
+    assert _scan_usage(tmp_path, _number(1, 10) + _number(2, 100), 'no-output').events == ()
 
 
 def test_a_counter_of_the_wrong_type_stays_unsupported(tmp_path: Path) -> None:
