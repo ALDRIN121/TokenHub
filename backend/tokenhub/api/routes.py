@@ -155,6 +155,18 @@ def collection_status(request: Request) -> dict[str, object]:
         return container.services.collection.status(container.settings.scan_interval_seconds)
 
 
+@router.post("/collection/refresh")
+def refresh_collection(request: Request) -> dict[str, object]:
+    """Scan approved sources now and return the completed scan time."""
+    container = container_for(request)
+    try:
+        container.collect()
+    except Exception as error:
+        raise _service_failure(error) from error
+    with container.lock:
+        return container.services.collection.status(container.settings.scan_interval_seconds)
+
+
 def _collection_connector(provider: str) -> str:
     connectors = {
         "codex": "codex-local",

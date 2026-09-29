@@ -1,4 +1,5 @@
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,26 @@ def test_discovery_to_dashboard_api_flow(client: TestClient, tmp_path: Path) -> 
     for response in (approved, scanned, summary, client.get("/api/v1/discovery"), client.get("/api/v1/data-quality")):
         for private in (str(tmp_path), "canonical_path", "approved_root", "payload", "sk-synthetic-secret", "auth.json"):
             assert private not in response.text
+
+
+def test_manual_refresh_collects_existing_and_new_sessions(client: TestClient, tmp_path: Path) -> None:
+    assert client.post("/api/v1/collection/codex/enable", headers=ORIGIN).status_code == 200
+    assert client.get("/api/v1/usage").json()["totals"]["workload_tokens"] == 125
+
+    sessions = tmp_path / "home" / ".codex" / "sessions"
+    with (sessions / "synthetic.jsonl").open("ab") as stream:
+        stream.write(token_record(2, input_tokens=10, output_tokens=5))
+    (sessions / "new.jsonl").write_bytes(token_record(1, input_tokens=4, output_tokens=6))
+
+    assert client.get("/api/v1/usage").json()["totals"]["workload_tokens"] == 125
+    assert client.post("/api/v1/collection/refresh").status_code == 403
+    refreshed = client.post("/api/v1/collection/refresh", headers=ORIGIN)
+    assert refreshed.status_code == 200
+    assert datetime.fromisoformat(refreshed.json()["last_scan_at"]).tzinfo is not None
+    assert refreshed.json()["failed_source_count"] == 0
+    assert client.get("/api/v1/usage").json()["totals"]["workload_tokens"] == 150
+    assert client.post("/api/v1/collection/refresh", headers=ORIGIN).status_code == 200
+    assert client.get("/api/v1/usage").json()["totals"]["workload_tokens"] == 150
 
 
 def test_nullable_metrics_and_quality_are_serialized(client: TestClient, tmp_path: Path) -> None:

@@ -57,8 +57,10 @@ The packaged UI is mounted at `/`; the API also works if the built UI is absent.
 ## Automatic collection
 
 While TokenHub is running, it scans approved sources from all five providers at startup and every
-30 seconds. The explorer refreshes itself every 10 seconds. Approving a provider
-in the UI also starts its first import immediately. Unchanged session files are skipped. Hermes and Antigravity databases are checked on each scan
+30 seconds. The explorer refreshes itself every 10 seconds. **Refresh data** scans
+approved sources immediately and shows the last scan time. Approving a provider
+in the UI also starts its first import immediately. Unchanged session files are
+skipped. Hermes and Antigravity databases are checked on each scan
 because active usage can live in their SQLite journal. Repeated scans do not
 increase totals. Automatic scans of unchanged data do not create extra
 import-history rows, including after restarting TokenHub.

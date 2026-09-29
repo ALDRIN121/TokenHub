@@ -24,6 +24,11 @@ function refusesWithoutOrigin(request: Request): Response | null {
 
 export const handlers = [
   http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: false, last_scan_at: null, failed_source_count: 0 })),
+  http.post('/api/v1/collection/refresh', ({ request }) => {
+    const refusal = refusesWithoutOrigin(request);
+    if (refusal !== null) return refusal;
+    return HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: false, auto_import_connectors: [], last_scan_at: '2026-09-29T08:30:00+00:00', failed_source_count: 0 });
+  }),
   http.post('/api/v1/collection/:provider/:action', ({ request, params }) => {
     const refusal = refusesWithoutOrigin(request);
     if (refusal !== null) return refusal;

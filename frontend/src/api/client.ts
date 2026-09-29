@@ -55,6 +55,10 @@ export function getCollectionStatus(): Promise<CollectionStatus> {
   return request<CollectionStatus>('/collection');
 }
 
+export function refreshCollection(): Promise<CollectionStatus> {
+  return request<CollectionStatus>('/collection/refresh', { method: 'POST' });
+}
+
 export function setProviderAutoImport(provider: string, enabled: boolean): Promise<CollectionStatus> {
   return request<CollectionStatus>(`/collection/${encodeURIComponent(provider)}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' });
 }

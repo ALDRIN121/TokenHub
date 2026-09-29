@@ -7,6 +7,7 @@ import {
   getCollectionStatus,
   getDiscovery,
   rebuildIndex,
+  refreshCollection,
   setProviderAutoImport,
 } from './api/client';
 import { ProviderCard, RESCANNABLE_STATES } from './components/ProviderCard';
@@ -202,6 +203,7 @@ export default function App() {
     setStatus(null);
     setRefreshing(true);
     try {
+      await refreshCollection();
       await refresh();
     } catch (cause: unknown) {
       setError(describeError(cause));
@@ -269,7 +271,7 @@ export default function App() {
           <div>
             <h1>Your token hub.</h1>
             <p className="app__tagline">Token usage across your agents, models, and sessions.</p>
-            {collection ? <p className="sync-status"><span className="status-dot" />Auto sync every {collection.scan_interval_seconds} seconds{collection.last_scan_at ? ` · Last checked ${formatTimestamp(collection.last_scan_at)}` : ''}</p> : null}
+            {collection ? <p className="sync-status"><span className="status-dot" />Auto sync every {collection.scan_interval_seconds} seconds{collection.last_scan_at ? ` · Last refreshed ${formatTimestamp(collection.last_scan_at)}` : ''}</p> : null}
           </div>
           <button type="button" className="button button--secondary" onClick={handleRefresh} disabled={actionsDisabled} aria-busy={refreshing}>
             <Icon name="refresh" className={refreshing ? 'is-spinning' : ''} />Refresh data

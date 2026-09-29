@@ -11,6 +11,27 @@ import {
 } from './test/fixtures';
 
 describe('TokenHub client', () => {
+  it('scans on manual refresh before showing new usage and its refresh time', async () => {
+    let workload = 125;
+    let lastScan: string | null = null;
+    server.use(
+      http.get('/api/v1/usage', () => HttpResponse.json({ ...usageFixture, totals: { ...usageFixture.totals, workload_tokens: workload } })),
+      http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: true, auto_import_connectors: ['codex-local'], last_scan_at: lastScan, failed_source_count: 0 })),
+      http.post('/api/v1/collection/refresh', () => {
+        workload = 140;
+        lastScan = '2026-09-29T08:30:00+00:00';
+        return HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: true, auto_import_connectors: ['codex-local'], last_scan_at: lastScan, failed_source_count: 0 });
+      }),
+    );
+    render(<App />);
+    await screen.findByRole('table', { name: 'Model usage' });
+    expect(screen.queryByText(/Last refreshed/)).not.toBeInTheDocument();
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh data' }));
+    await waitFor(() => expect(within(screen.getByText('Workload tokens').parentElement!).getByText('140')).toHaveAttribute('title', '140'));
+    expect(screen.getByText(/Last refreshed Sep 29, 2026/)).toBeInTheDocument();
+  });
+
   it('waits for all requests in a failed batch before starting another refresh', async () => {
     const timers = vi.spyOn(window, 'setInterval');
     const fetches = vi.spyOn(globalThis, 'fetch');
@@ -36,7 +57,7 @@ describe('TokenHub client', () => {
       polling = (call[0] as () => Promise<void>)();
       await waitFor(() => expect(failedResponse).toBe(true));
       await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh data' }));
-      expect(fetches.mock.calls.length - initialCalls).toBe(4);
+      expect(fetches.mock.calls.length - initialCalls).toBe(5);
     } finally {
       finish();
       await act(async () => { await polling; });
@@ -63,7 +84,7 @@ describe('TokenHub client', () => {
       const initialCalls = fetches.mock.calls.length;
       polling = (call[0] as () => Promise<void>)();
       await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh data' }));
-      expect(fetches.mock.calls.length - initialCalls).toBe(4);
+      expect(fetches.mock.calls.length - initialCalls).toBe(5);
     } finally {
       finish();
       await act(async () => { await polling; });
