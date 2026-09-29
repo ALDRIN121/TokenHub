@@ -13,13 +13,28 @@ databases.
 
 ## Install and run
 
+Requires Python 3.12 or newer. After the public package is released:
+
 ```bash
-uv sync --all-groups          # Python 3.12+, uv
-uv run tokenhub               # serves the API and the built UI
+pip install tokenhub
+tokenhub                     # starts in the background and opens the local dashboard
+tokenhub status              # prints its local URL
+tokenhub open                # opens an already running dashboard
+tokenhub stop                # stops this TokenHub instance
 ```
 
-TokenHub binds to `127.0.0.1:7432` and prints that URL on startup. It is
-loopback-only by design:
+`tokenhub start --no-open` starts without opening a browser. Use
+`tokenhub start --port 9000` to choose another loopback port. A second start
+reuses the running instance, including its chosen port. The server continues
+after the terminal closes; run `tokenhub` again after a reboot or login. Logs
+and local data are stored in `~/.tokenhub/`, with startup details in
+`~/.tokenhub/runtime.log`.
+
+For development from this checkout, run `uv sync --all-groups` and
+`uv run tokenhub --no-open`.
+
+TokenHub binds to `127.0.0.1:7432` by default and prints that URL when it
+starts. It is loopback-only by design:
 
 - the bind host is validated at startup — `0.0.0.0`, `::`, or any non-loopback
   value raises rather than serving;
@@ -161,6 +176,8 @@ uv run pytest tests/integration -m integration -q   # real app stack, synthetic 
 uv run ruff check backend tests
 uv run mypy backend
 cd frontend && npm run test -- --run && npm run build
+uv build
+python scripts/verify_distribution.py dist/*  # tests installed wheel and source archive
 ```
 
 Every test is offline and deterministic: synthetic fixtures in a temp directory,

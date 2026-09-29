@@ -1,0 +1,51 @@
+name: Package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v10
+      - name: Check bundled dashboard
+        shell: bash
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run test -- --run
+          npm --prefix frontend run build
+          git status --porcelain -- backend/tokenhub/web > ui-status.txt
+          test ! -s ui-status.txt
+      - name: Install Python dependencies
+        run: uv sync --frozen --all-groups
+      - name: Test and type check
+        run: |
+          uv run --frozen pytest -q
+          uv run --frozen pytest tests/integration -m integration -q
+          uv run --frozen ruff check backend tests scripts
+          uv run --frozen mypy backend
+      - name: Build and smoke-test wheel and source archive
+        shell: bash
+        run: |
+          uv build
+          python scripts/verify_distribution.py dist/*
