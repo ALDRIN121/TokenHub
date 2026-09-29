@@ -1,0 +1,3 @@
+# Vite preserves the template's line endings in the generated dashboard.
+frontend/index.html text eol=lf
+backend/tokenhub/web/** text eol=lf
