@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+- Antigravity generations with no cached or thinking tokens were rejected as
+  "a usage counter is missing", so a conversation's first short messages could
+  import nothing. A counter the writer omitted (protobuf leaves out zeros) now
+  counts as 0; output totals must still reconcile, and messages without any input
+  or output counter remain unsupported.
+
 ### Changed
 - Antigravity's card now says when its saved conversations are in a format TokenHub
   cannot read (the desktop app's encrypted `.pb` files) instead of "No local source

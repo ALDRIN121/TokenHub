@@ -28,6 +28,8 @@ from tokenhub.domain.models import (
 from tokenhub.security.paths import open_source_path
 
 _MAX_COUNT = 2**63 - 1
+_INPUT_COUNTERS = frozenset({1, 2, 5})
+_OUTPUT_COUNTERS = frozenset({3, 9, 10})
 
 
 def _fields(data: bytes) -> list[tuple[int, int | bytes]]:
@@ -77,6 +79,14 @@ def _field(data: bytes, number: int, kind: type[int] | type[bytes]) -> int | byt
     return next((value for field, value in _fields(data) if field == number and isinstance(value, kind)), None)
 
 
+def _counter(fields: list[tuple[int, int | bytes]], number: int) -> int | None:
+    """A varint counter, ``0`` when the writer omitted it, ``None`` if not an integer."""
+    values = [value for field, value in fields if field == number]
+    if not values:
+        return 0
+    return values[0] if isinstance(values[0], int) else None
+
+
 def _timestamp(data: bytes) -> datetime | None:
     try:
         seconds = _field(data, 1, int)
@@ -121,10 +131,17 @@ def _generation(
         usage = _field(chat, 4, bytes) if isinstance(chat, bytes) else None
         if not isinstance(chat, bytes) or not isinstance(usage, bytes):
             return None
-        parts = [_field(usage, number, int) for number in (1, 2, 3, 5, 9, 10)]
-        if any(not isinstance(value, int) or not 0 <= value <= _MAX_COUNT for value in parts):
+        fields = _fields(usage)
+        present = {number for number, _ in fields}
+        # A protobuf writer omits a counter whose value is zero, so a first message
+        # with no cached input has no cache-read field. Still require a recognisable
+        # usage message: at least one input counter and one output counter.
+        if not present & _INPUT_COUNTERS or not present & _OUTPUT_COUNTERS:
             return None
-        numbers = [value for value in parts if isinstance(value, int)]
+        parts = [_counter(fields, number) for number in (1, 2, 3, 5, 9, 10)]
+        if any(value is None or not 0 <= value <= _MAX_COUNT for value in parts):
+            return None
+        numbers = [value for value in parts if value is not None]
         fixed, new_input, total_output, cache_read, text_output, thinking = numbers
         if total_output != text_output + thinking:
             return None

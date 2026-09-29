@@ -87,6 +87,61 @@ def test_discovers_and_imports_verified_generation_usage(tmp_path: Path) -> None
     assert connector.scan(approved, result.cursor).events == ()
 
 
+def _scan_usage(tmp_path: Path, usage: bytes):
+    """Scan one generation whose usage message is exactly ``usage``."""
+    home = tmp_path / 'home'
+    path = home / '.gemini/antigravity/conversations/conversation.db'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER)')
+        db.execute('CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB)')
+        blob = _bytes(1, _bytes(4, usage + _bytes(11, b'response-a')) + _bytes(19, b'gemini-test'))
+        db.execute('INSERT INTO gen_metadata VALUES (0, ?, 0)', (blob,))
+        db.execute('INSERT INTO steps VALUES (0, 15, ?)', (_step('response-a', 1790668800),))
+    connector = AntigravityConnector()
+    source = connector.discover_sources(DiscoveryContext(home, {}, lambda _: None))[0]
+    approved = type(source)(
+        source.source_id, source.connector_id, source.provider, source.display_name,
+        source.canonical_path, source.approved_root, source.source_type,
+        source.path_fingerprint, SourceState.APPROVED, source.evidence_codes,
+        source.scan_supported, source.parser_version,
+        source.approved_root_device, source.approved_root_inode,
+    )
+    return connector.scan(approved, None)
+
+
+def test_a_first_message_without_cached_or_thinking_tokens_is_imported(tmp_path: Path) -> None:
+    # Protobuf omits zero-valued fields: no cache-read (5) and no thinking (10).
+    usage = _number(1, 10) + _number(2, 100) + _number(3, 25) + _number(9, 25)
+    result = _scan_usage(tmp_path, usage)
+    assert result.state == SourceState.HEALTHY
+    assert result.unsupported_records == 0
+    event = result.events[0]
+    assert (event.input_total_tokens, event.output_total_tokens) == (110, 25)
+    assert (event.cache_read_tokens, event.reasoning_tokens) == (0, 0)
+
+
+def test_omitted_counters_do_not_relax_output_reconciliation(tmp_path: Path) -> None:
+    # Output total 30 but only 25 of text and no thinking: still unverifiable.
+    usage = _number(1, 10) + _number(2, 100) + _number(3, 30) + _number(9, 25)
+    result = _scan_usage(tmp_path, usage)
+    assert result.events == ()
+    assert result.unsupported_records == 1
+
+
+def test_a_usage_message_without_input_or_output_counters_stays_unsupported(tmp_path: Path) -> None:
+    assert _scan_usage(tmp_path, _number(3, 25) + _number(9, 25)).events == ()
+    assert _scan_usage(tmp_path, _number(1, 10) + _number(2, 100)).events == ()
+
+
+def test_a_counter_of_the_wrong_type_stays_unsupported(tmp_path: Path) -> None:
+    usage = _number(1, 10) + _number(2, 100) + _bytes(3, b'25') + _number(9, 25)
+    result = _scan_usage(tmp_path, usage)
+    assert result.events == ()
+    assert result.unsupported_records == 1
+
+
 def test_desktop_app_pb_conversations_are_reported_as_an_unreadable_format(tmp_path: Path) -> None:
     home = tmp_path / 'home'
     conversations = home / '.gemini/antigravity/conversations'
