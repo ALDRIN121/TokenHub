@@ -11,7 +11,7 @@ from pathlib import Path
 
 from filelock import FileLock
 
-from tokenhub.runtime.client import probe
+from tokenhub.runtime.client import probe, request_stop
 from tokenhub.runtime.instance import (
     InstanceRecord,
     delete_record,
@@ -42,6 +42,24 @@ class RuntimeManager:
     def status(self) -> str | None:
         record = read_record(self.data_directory)
         return _url(record.port) if record is not None and probe(record) else None
+
+    def stop(self) -> bool:
+        """Stop only the server proven by the private token, never a recorded PID."""
+        self._prepare_directory()
+        with FileLock(str(self.data_directory / "runtime.lock"), timeout=10):
+            record = read_record(self.data_directory)
+            if record is None or not probe(record):
+                return False
+            if not request_stop(record):
+                raise RuntimeError("Token Hub could not be stopped")
+            deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
+            while probe(record):
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Token Hub did not stop in time")
+                time.sleep(_POLL_INTERVAL_SECONDS)
+            if read_record(self.data_directory) == record:
+                delete_record(self.data_directory)
+            return True
 
     def start(self, port: int | None = None) -> str:
         if port is not None:

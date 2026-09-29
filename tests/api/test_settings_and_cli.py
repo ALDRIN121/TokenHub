@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
 from tokenhub.settings import DEFAULT_HOST, DEFAULT_PORT, TokenHubSettings
 
 
@@ -78,20 +79,63 @@ def test_loopback_url_brackets_ipv6_and_keeps_defaults() -> None:
     assert cli.loopback_url(TokenHubSettings(host="::1", port=9000)) == "http://[::1]:9000/"
 
 
-def test_cli_main_runs_uvicorn_on_loopback_without_proxy_trust(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_cli_start_defaults_to_background_and_opens_browser(monkeypatch, capsys) -> None:
     from tokenhub import cli
 
-    calls: list[tuple[object, dict[str, object]]] = []
-    monkeypatch.setattr(cli.uvicorn, "run", lambda app, **kwargs: calls.append((app, kwargs)))
-    cli.main()
-    assert len(calls) == 1
-    app, kwargs = calls[0]
-    assert isinstance(app, FastAPI)
-    assert kwargs == {
-        "host": "127.0.0.1",
-        "port": 7432,
-        "proxy_headers": False,
-        "access_log": False,
-    }
+    starts, opens = [], []
+    manager = SimpleNamespace(start=lambda port=None: starts.append(port) or "http://127.0.0.1:7432/")
+    monkeypatch.setattr(cli, "RuntimeManager", lambda _: manager)
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opens.append(url) or True)
+    assert cli.main([]) == 0
+    assert starts == [None]
+    assert opens == ["http://127.0.0.1:7432/"]
+    assert "http://127.0.0.1:7432/" in capsys.readouterr().out
+    assert cli.main(["start", "--port", "9000", "--no-open"]) == 0
+    assert starts == [None, 9000]
+    assert len(opens) == 1
+
+
+def test_cli_status_open_and_stop(monkeypatch, capsys) -> None:
+    from tokenhub import cli
+
+    opens = []
+    manager = SimpleNamespace(
+        status=lambda: "http://127.0.0.1:9000/",
+        stop=lambda: True,
+    )
+    monkeypatch.setattr(cli, "RuntimeManager", lambda _: manager)
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opens.append(url) or True)
+    assert cli.main(["status"]) == 0
+    assert cli.main(["open"]) == 0
+    assert opens == ["http://127.0.0.1:9000/"]
+    assert cli.main(["stop"]) == 0
+    assert "Token Hub stopped" in capsys.readouterr().out
+
+
+def test_cli_stopped_open_and_browser_failure(monkeypatch, capsys) -> None:
+    from tokenhub import cli
+
+    manager = SimpleNamespace(
+        status=lambda: None,
+        stop=lambda: False,
+        start=lambda port=None: "http://127.0.0.1:7432/",
+    )
+    monkeypatch.setattr(cli, "RuntimeManager", lambda _: manager)
+    monkeypatch.setattr(cli.webbrowser, "open", lambda _: False)
+    assert cli.main(["open"]) == 1
+    assert "run tokenhub start" in capsys.readouterr().out
+    assert cli.main(["status"]) == 1
+    assert cli.main(["stop"]) == 0
+    assert cli.main(["start"]) == 0
+    assert "http://127.0.0.1:7432/" in capsys.readouterr().out
+
+
+def test_hidden_child_entrypoint_consumes_token(monkeypatch):
+    from tokenhub import cli
+
+    calls = []
+    monkeypatch.setenv("TOKENHUB_INTERNAL_CONTROL_TOKEN", "a" * 64)
+    monkeypatch.setattr(cli, "run_server", lambda settings, token: calls.append((settings.port, token)))
+    assert cli.main(["_serve", "9000"]) == 0
+    assert calls == [(9000, "a" * 64)]
+    assert "TOKENHUB_INTERNAL_CONTROL_TOKEN" not in os.environ

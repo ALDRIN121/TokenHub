@@ -95,3 +95,40 @@ def test_early_exit_cleans_record_and_reports_log(tmp_path, monkeypatch):
         RuntimeManager(tmp_path).start()
     assert child.waited
     assert read_record(tmp_path) is None
+
+
+def test_stop_refuses_unverified_record_without_contacting_pid(tmp_path, monkeypatch):
+    from tokenhub.runtime import manager as module
+
+    record = InstanceRecord(123, 7432, "a" * 64)
+    write_record(tmp_path, record)
+    monkeypatch.setattr(module, "probe", lambda _: False)
+    monkeypatch.setattr(module, "request_stop", lambda _: pytest.fail("contacted foreign process"))
+    assert RuntimeManager(tmp_path).stop() is False
+    assert read_record(tmp_path) == record
+
+
+def test_stop_waits_for_shutdown_then_clears_matching_record(tmp_path, monkeypatch):
+    from tokenhub.runtime import manager as module
+
+    record = InstanceRecord(123, 7432, "a" * 64)
+    write_record(tmp_path, record)
+    probes = iter([True, True, False])
+    monkeypatch.setattr(module, "probe", lambda _: next(probes))
+    monkeypatch.setattr(module, "request_stop", lambda _: True)
+    monkeypatch.setattr(module.time, "sleep", lambda _: None)
+    assert RuntimeManager(tmp_path).stop() is True
+    assert read_record(tmp_path) is None
+    assert RuntimeManager(tmp_path).stop() is False
+
+
+def test_failed_stop_retains_record(tmp_path, monkeypatch):
+    from tokenhub.runtime import manager as module
+
+    record = InstanceRecord(123, 7432, "a" * 64)
+    write_record(tmp_path, record)
+    monkeypatch.setattr(module, "probe", lambda _: True)
+    monkeypatch.setattr(module, "request_stop", lambda _: False)
+    with pytest.raises(RuntimeError, match="could not be stopped"):
+        RuntimeManager(tmp_path).stop()
+    assert read_record(tmp_path) == record

@@ -125,13 +125,33 @@ def test_settings_reject_non_loopback_bind(host: str) -> None:
         TokenHubSettings(host=host)
 
 
-def test_cli_starts_loopback_server(monkeypatch: pytest.MonkeyPatch) -> None:
-    from tokenhub import cli
+def test_server_config_binds_loopback_without_proxy_trust(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tokenhub import server
 
     calls = []
-    monkeypatch.setattr(cli.uvicorn, "run", lambda app, **kwargs: calls.append(kwargs))
-    cli.main()
-    assert calls == [{"host": "127.0.0.1", "port": 7432, "proxy_headers": False, "access_log": False}]
+
+    class FakeServer:
+        def __init__(self, config):
+            self.config = config
+            self.should_exit = False
+
+        def run(self):
+            calls.append("run")
+
+    def config(app, **kwargs):
+        calls.append((app, kwargs))
+        return object()
+
+    monkeypatch.setattr(server.uvicorn, "Config", config)
+    monkeypatch.setattr(server.uvicorn, "Server", FakeServer)
+    server.run_server(TokenHubSettings(), "a" * 64)
+    assert calls[0][1] == {
+        "host": "127.0.0.1",
+        "port": 7432,
+        "proxy_headers": False,
+        "access_log": False,
+    }
+    assert calls[1] == "run"
 
 
 def test_static_mount_is_optional(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
