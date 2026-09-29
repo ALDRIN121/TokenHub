@@ -46,7 +46,8 @@ jobs:
           npm --prefix frontend ci
           npm --prefix frontend run test -- --run
           npm --prefix frontend run build
-          git status --porcelain -- backend/tokenhub/web > ui-status.txt
+          git status --porcelain -- backend/tokenhub/web | tee ui-status.txt
+          git diff --numstat -- backend/tokenhub/web
           test ! -s ui-status.txt
       - name: Test and build package
         shell: bash
