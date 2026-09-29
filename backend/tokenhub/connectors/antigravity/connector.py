@@ -31,8 +31,9 @@ from tokenhub.security.paths import (
 def _has_unreadable_conversations(root: Path) -> bool:
     """Whether ``conversations`` holds saved chats in a format this connector cannot read.
 
-    The desktop app saves ``.pb`` protobuf files; only the ``.db`` databases carry
-    the counters TokenHub reads. Only names are listed, never file contents.
+    The desktop app saves ``.pb`` files that look encrypted (near-maximum entropy);
+    only the ``.db`` databases carry the counters TokenHub reads. Only names are
+    listed, never file contents.
     """
     conversations = root / "conversations"
     if not conversations.is_dir() or conversations.is_symlink():

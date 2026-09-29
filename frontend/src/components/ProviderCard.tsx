@@ -7,7 +7,7 @@ const EVIDENCE_LABELS: Record<string, string> = {
   configuration_found: 'configuration file present',
   session_source_found: 'session source found',
   state_database_found: 'state database found',
-  unsupported_session_format: 'saved sessions in an unreadable format',
+  unsupported_session_format: 'saved sessions in a format TokenHub cannot read',
 };
 
 /**
@@ -61,7 +61,7 @@ export function ProviderCard({ provider, actionsDisabled = false, autoImportEnab
         <span className={`badge ${detectionFailed ? 'badge--warning' : supported ? 'badge--success' : 'badge--neutral'}`}>{stateLabel}</span>
       </div>
       <p className="provider-card__description">
-        {detectionFailed ? 'This installation could not be checked. Choose Refresh data to retry detection.' : supported ? 'Approved session usage updates automatically on this device.' : unreadableFormat ? 'Installation detected. Its saved conversations use a file format TokenHub cannot read yet.' : detected ? 'Installation detected. Usage imports are not supported yet.' : 'No installation detected on this machine.'}
+        {detectionFailed ? 'This installation could not be checked. Choose Refresh data to retry detection.' : supported ? 'Approved session usage updates automatically on this device.' : unreadableFormat ? 'Installation detected. Its saved conversations appear to be encrypted, so TokenHub cannot read them.' : detected ? 'Installation detected. Usage imports are not supported yet.' : 'No installation detected on this machine.'}
       </p>
 
       {supported && onAutoImportChange ? (
@@ -75,7 +75,7 @@ export function ProviderCard({ provider, actionsDisabled = false, autoImportEnab
 
       {provider.sources.length === 0 ? (
         <p className="provider-card__note">
-          {detectionFailed ? 'Source availability is unknown until detection succeeds.' : unreadableFormat ? `${provider.display_name} saved conversations were found, but not in a format TokenHub can read. Nothing is imported or estimated.` : `No local source was found for ${provider.display_name}.`}
+          {detectionFailed ? 'Source availability is unknown until detection succeeds.' : unreadableFormat ? `${provider.display_name} saved conversations were found, but they are not in a format TokenHub can read. Nothing is imported or estimated.` : `No local source was found for ${provider.display_name}.`}
         </p>
       ) : null}
       <details className="provider-card__details">

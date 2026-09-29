@@ -351,8 +351,8 @@ describe('TokenHub client', () => {
     render(<App />);
 
     const card = await screen.findByRole('article', { name: 'Antigravity' });
-    expect(within(card).getByText(/saved conversations use a file format TokenHub cannot read yet/)).toBeInTheDocument();
-    expect(within(card).getByText(/saved conversations were found, but not in a format TokenHub can read/)).toBeInTheDocument();
+    expect(within(card).getByText(/saved conversations appear to be encrypted, so TokenHub cannot read them/)).toBeInTheDocument();
+    expect(within(card).getByText(/saved conversations were found, but they are not in a format TokenHub can read/)).toBeInTheDocument();
     expect(within(card).queryByText(/No local source was found/)).not.toBeInTheDocument();
     expect(within(card).queryByText(/Usage imports are not supported yet/)).not.toBeInTheDocument();
   });
