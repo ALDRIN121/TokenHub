@@ -13,18 +13,22 @@ on:
         required: true
         default: '0.1.0'
         type: string
+      wheel_sha256:
+        description: Reviewed TestPyPI wheel SHA-256 (required for PyPI)
+        required: false
+        type: string
+      sdist_sha256:
+        description: Reviewed TestPyPI source archive SHA-256 (required for PyPI)
+        required: false
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  publish:
+  build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: ${{ inputs.destination }}
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -58,6 +62,56 @@ jobs:
           uv run --frozen mypy backend
           uv build
           python scripts/verify_distribution.py dist/*
+      - name: Save verified distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: tokenhub-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  prepare:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Download verified distributions
+        if: inputs.destination == 'testpypi'
+        uses: actions/download-artifact@v7
+        with:
+          name: tokenhub-distributions
+          path: dist
+      - name: Download reviewed TestPyPI distributions
+        if: inputs.destination == 'pypi'
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          WHEEL_SHA256: ${{ inputs.wheel_sha256 }}
+          SDIST_SHA256: ${{ inputs.sdist_sha256 }}
+        run: python scripts/download_testpypi_release.py "$RELEASE_VERSION" "$WHEEL_SHA256" "$SDIST_SHA256" dist
+      - name: Verify reviewed TestPyPI distributions
+        if: inputs.destination == 'pypi'
+        run: python scripts/verify_distribution.py dist/*
+      - name: Save release distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.destination }}
+    permissions:
+      id-token: write
+    steps:
+      - name: Download release distributions
+        uses: actions/download-artifact@v7
+        with:
+          name: release-distributions
+          path: dist
       - name: Publish to TestPyPI
         if: inputs.destination == 'testpypi'
         uses: pypa/gh-action-pypi-publish@release/v1
