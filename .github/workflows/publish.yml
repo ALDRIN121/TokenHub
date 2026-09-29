@@ -1,0 +1,67 @@
+name: Publish TokenHub
+
+on:
+  workflow_dispatch:
+    inputs:
+      destination:
+        description: Package index
+        required: true
+        type: choice
+        options: [testpypi, pypi]
+      version:
+        description: Version expected in pyproject.toml
+        required: true
+        default: '0.1.0'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.destination }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v10
+      - name: Check requested version
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: python -c "import os, tomllib; assert tomllib.load(open('pyproject.toml', 'rb'))['project']['version'] == os.environ['EXPECTED_VERSION']"
+      - name: Build checked dashboard
+        shell: bash
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run test -- --run
+          npm --prefix frontend run build
+          git status --porcelain -- backend/tokenhub/web > ui-status.txt
+          test ! -s ui-status.txt
+      - name: Test and build package
+        shell: bash
+        run: |
+          uv sync --frozen --all-groups
+          uv run --frozen pytest -q
+          uv run --frozen ruff check backend tests scripts
+          uv run --frozen mypy backend
+          uv build
+          python scripts/verify_distribution.py dist/*
+      - name: Publish to TestPyPI
+        if: inputs.destination == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+      - name: Publish to PyPI
+        if: inputs.destination == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
