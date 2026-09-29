@@ -12,8 +12,10 @@ path, approved root, provider path, credential, prompt, or raw record.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from tokenhub.api.container import Container
 
@@ -154,7 +156,13 @@ def collection_status(request: Request) -> dict[str, object]:
 
 
 def _collection_connector(provider: str) -> str:
-    connectors = {"codex": "codex-local", "claude_code": "claude-code-local", "hermes": "hermes-local"}
+    connectors = {
+        "codex": "codex-local",
+        "claude_code": "claude-code-local",
+        "hermes": "hermes-local",
+        "vscode_copilot": "vscode-copilot-local",
+        "antigravity": "antigravity-local",
+    }
     if provider not in connectors:
         raise HTTPException(status_code=422, detail="Source is not supported")
     return connectors[provider]
@@ -244,8 +252,16 @@ def data_quality(request: Request) -> dict[str, object]:
 
 
 @router.get("/usage")
-def usage(request: Request) -> dict[str, object]:
+def usage(
+    request: Request,
+    start: Annotated[datetime | None, Query(alias="from")] = None,
+    end: Annotated[datetime | None, Query(alias="to")] = None,
+) -> dict[str, object]:
     """Path-free usage grouped by agent, recorded model, and opaque session."""
+    if any(value is not None and value.utcoffset() is None for value in (start, end)):
+        raise HTTPException(status_code=422, detail="Date bounds require a timezone")
+    if start is not None and end is not None and start >= end:
+        raise HTTPException(status_code=422, detail="Date range must end after it begins")
     container = container_for(request)
     with container.lock:
-        return container.services.analytics.usage_breakdown()
+        return container.services.analytics.usage_breakdown(start, end)

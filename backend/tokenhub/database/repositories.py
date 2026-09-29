@@ -1,6 +1,6 @@
 """Repositories that keep source approval and scan persistence transactional."""
 
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import case, delete, func, or_, select, update
@@ -191,6 +191,8 @@ class SourceRepository:
                 ("codex-local", "codex"),
                 ("claude-code-local", "claude_code"),
                 ("hermes-local", "hermes"),
+                ("vscode-copilot-local", "vscode_copilot"),
+                ("antigravity-local", "antigravity"),
             }
             or not candidate.scan_supported
             or candidate.approved_root_device is None
@@ -392,11 +394,18 @@ class UsageRepository:
         )
         return events, delta
 
-    def observed_events(self) -> list[UsageEventRecord]:
+    def observed_events(
+        self, start: datetime | None = None, end: datetime | None = None
+    ) -> list[UsageEventRecord]:
         """Detached canonical observations shared with the overview totals."""
         events, delta = self._canonical_deltas()
+        query = select(events).where(delta)
+        if start is not None:
+            query = query.where(events.timestamp >= start.astimezone(UTC).replace(tzinfo=None))
+        if end is not None:
+            query = query.where(events.timestamp < end.astimezone(UTC).replace(tzinfo=None))
         with self.session.begin():
-            rows = list(self.session.scalars(select(events).where(delta)))
+            rows = list(self.session.scalars(query))
             for row in rows:
                 self.session.expunge(row)
             return rows

@@ -65,6 +65,26 @@ def test_nullable_metrics_and_quality_are_serialized(client: TestClient, tmp_pat
     assert source_quality["latest_event_at"].startswith("2026-09-20T10:00:00")
 
 
+def test_usage_endpoint_filters_a_local_day_before_aggregation(client: TestClient) -> None:
+    assert client.post('/api/v1/collection/codex/enable', headers=ORIGIN).status_code == 200
+    day = client.get('/api/v1/usage', params={
+        'from': '2026-09-20T00:00:00Z', 'to': '2026-09-21T00:00:00Z',
+    })
+    assert day.status_code == 200
+    assert day.json()['totals']['workload_tokens'] == 125
+    assert len(day.json()['models']) == 1
+    other = client.get('/api/v1/usage', params={
+        'from': '2026-09-21T00:00:00Z', 'to': '2026-09-22T00:00:00Z',
+    })
+    assert other.json()['totals']['event_count'] == 0
+    assert other.json()['totals']['workload_tokens'] is None
+    assert client.get('/api/v1/usage').json()['totals']['workload_tokens'] == 125
+    assert client.get('/api/v1/usage', params={'from': '2026-09-20T00:00:00'}).status_code == 422
+    assert client.get('/api/v1/usage', params={
+        'from': '2026-09-21T00:00:00Z', 'to': '2026-09-20T00:00:00Z',
+    }).status_code == 422
+
+
 def test_service_errors_are_safe(client: TestClient, tmp_path: Path) -> None:
     discovery = client.get("/api/v1/discovery").json()
     hermes = discovery["providers"][2]["sources"][0]["source_id"]

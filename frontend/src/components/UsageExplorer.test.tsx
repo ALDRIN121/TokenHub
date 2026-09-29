@@ -16,6 +16,25 @@ const data: UsageBreakdown = {
 };
 
 describe('usage explorer', () => {
+  it('filters Copilot Chat usage by agent and shows its recorded model and session', async () => {
+    const user = userEvent.setup();
+    const copilot: UsageBreakdown = {
+      ...usageFixture,
+      providers: [...usageFixture.providers, { ...usageFixture.totals, provider: 'vscode_copilot', workload_tokens: 24 }],
+      models: [...usageFixture.models, { ...usageFixture.models[0], provider: 'vscode_copilot', model_name: 'gpt-5-mini', workload_tokens: 24 }],
+      sessions: [...usageFixture.sessions, { ...usageFixture.sessions[0], provider: 'vscode_copilot', session_key: 'copilot-session', workload_tokens: 24,
+        models: [{ ...usageFixture.totals, model_name: 'gpt-5-mini', workload_tokens: 24 }] }],
+    };
+    render(<UsageExplorer data={copilot} />);
+
+    await user.click(screen.getByRole('button', { name: 'Filter by VS Code Copilot' }));
+    const table = screen.getByRole('table', { name: 'Model usage' });
+    expect(within(table).getByText('gpt-5-mini')).toBeInTheDocument();
+    expect(within(table).queryByText('gpt-test')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'View sessions for gpt-5-mini in VS Code Copilot' }));
+    expect(screen.getByRole('table', { name: 'Session usage' })).toHaveTextContent('copilot-');
+  });
+
   it('ranks models, filters agents, searches, and drills into model sessions', async () => {
     const user = userEvent.setup();
     render(<UsageExplorer data={data} />);

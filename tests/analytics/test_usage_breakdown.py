@@ -69,3 +69,27 @@ def test_canonical_message_prefers_recorded_model_on_equal_counts(app_services: 
     result = app_services.analytics.usage_breakdown()
     assert result['totals']['workload_tokens'] == 125
     assert result['models'][0]['model_name'] == 'recorded-model'
+
+
+def test_usage_period_filters_events_before_grouping(app_services: Services) -> None:
+    usage = app_services.usage_repository
+    usage.persist_scan([
+        replace(event('a', 'yesterday', 'older-model', 'first'), timestamp=datetime(2026, 9, 28, 18, tzinfo=UTC)),
+        replace(event('a', 'today', 'today-model', 'second'), timestamp=datetime(2026, 9, 29, 2, tzinfo=UTC)),
+        replace(event('a', 'tomorrow', 'future-model', 'third'), timestamp=datetime(2026, 9, 30, 2, tzinfo=UTC)),
+    ], SyncCursor('a', 0, None, 'test'))
+    result = app_services.analytics.usage_breakdown(
+        datetime(2026, 9, 29, tzinfo=UTC), datetime(2026, 9, 30, tzinfo=UTC)
+    )
+    assert result['totals']['workload_tokens'] == 125
+    assert result['totals']['session_count'] == 1
+    assert [row['model_name'] for row in result['models']] == ['today-model']
+    assert [row['provider'] for row in result['providers']] == ['claude_code']
+
+
+def test_usage_period_preserves_unknown_empty_totals(app_services: Services) -> None:
+    result = app_services.analytics.usage_breakdown(
+        datetime(2026, 9, 29, tzinfo=UTC), datetime(2026, 9, 30, tzinfo=UTC)
+    )
+    assert result['totals']['workload_tokens'] is None
+    assert result['totals']['event_count'] == 0

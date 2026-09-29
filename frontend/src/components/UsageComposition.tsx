@@ -1,6 +1,6 @@
-import type { DashboardSummary } from '../types';
+import type { UsageTotals } from '../types';
 
-export function UsageComposition({ dashboard }: { dashboard: DashboardSummary }) {
+export function UsageComposition({ dashboard }: { dashboard: UsageTotals }) {
   const input = dashboard.input_total_tokens;
   const output = dashboard.output_total_tokens;
   const total = dashboard.workload_tokens;

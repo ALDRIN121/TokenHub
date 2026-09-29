@@ -28,27 +28,28 @@ function evidenceLabel(code: string): string {
 
 interface ProviderCardProps {
   provider: ProviderSummary;
-  busySourceId: string | null;
   actionsDisabled?: boolean;
-  onApprove: (sourceId: string) => void;
-  onRescan: (sourceId: string) => void;
   autoImportEnabled?: boolean;
   onAutoImportChange?: (enabled: boolean) => void;
 }
 
-/**
- * One provider and its local sources. Actions are rendered only when the API
- * itself allows them: the connector must support scanning and the source state
- * must permit the action. Otherwise the card is read-only information.
- */
-export function ProviderCard({ provider, busySourceId, actionsDisabled = false, onApprove, onRescan, autoImportEnabled = false, onAutoImportChange }: ProviderCardProps) {
+/** One approval per import-capable provider, with a compact source summary. */
+export function ProviderCard({ provider, actionsDisabled = false, autoImportEnabled = false, onAutoImportChange }: ProviderCardProps) {
   const evidence = provider.evidence_codes.map(evidenceLabel);
   const evidenceText = evidence.length > 0 ? evidence.join(', ') : 'none recorded';
   const supported = provider.sources.some((source) => source.scan_supported);
   const detected = provider.evidence_codes.some((code) => code !== 'discovery_error');
   const detectionFailed = provider.state === 'error' || provider.evidence_codes.includes('discovery_error');
-  const symbols: Record<string, IconName> = { codex: 'terminal', claude_code: 'sparkle', hermes: 'hermes' };
+  const symbols: Record<string, IconName> = { codex: 'terminal', claude_code: 'sparkle', hermes: 'hermes', vscode_copilot: 'copilot', antigravity: 'sparkle' };
   const stateLabel = detectionFailed ? 'Detection failed' : supported ? 'Import supported' : detected ? 'Detection only' : 'Not detected';
+  const isCopilot = provider.provider === 'vscode_copilot';
+  const usageLabel: Record<string, string> = {
+    codex: 'Codex sessions', claude_code: 'Claude Code sessions',
+    hermes: 'Hermes Agent usage', vscode_copilot: 'Copilot sessions',
+    antigravity: 'Antigravity conversations',
+  };
+  const awaitingApproval = provider.sources.filter((source) => source.scan_supported && source.state === 'discovered').length;
+  const approved = provider.sources.filter((source) => source.scan_supported && RESCANNABLE_STATES.has(source.state)).length;
 
   return (
     <article className={`provider-card provider-card--${provider.provider ?? 'unknown'}`} aria-labelledby={`provider-${provider.connector_id}`}>
@@ -63,9 +64,9 @@ export function ProviderCard({ provider, busySourceId, actionsDisabled = false, 
 
       {supported && onAutoImportChange ? (
         <div className="provider-card__automation">
-          <p className="provider-card__note">{autoImportEnabled ? `Existing and new ${provider.display_name} sessions are included automatically.` : `Approve the local usage source once to automatically include new ${provider.display_name} sessions.`}</p>
-          <button type="button" className="button button--secondary" disabled={actionsDisabled} onClick={() => onAutoImportChange(!autoImportEnabled)}>
-            <Icon name="refresh" />{autoImportEnabled ? 'Stop including new sessions' : 'Include new sessions automatically'}
+          <p className="provider-card__note">{provider.sources.length} {isCopilot ? (provider.sources.length === 1 ? 'session' : 'sessions') : (provider.sources.length === 1 ? 'source' : 'sources')} found · {approved} approved{awaitingApproval ? ` · ${awaitingApproval} awaiting approval` : ''}. {autoImportEnabled ? 'Current and new usage updates automatically.' : 'One approval imports saved usage and includes new sessions automatically.'}</p>
+          <button type="button" className={`button ${autoImportEnabled ? 'button--secondary' : 'button--primary'}`} disabled={actionsDisabled} onClick={() => onAutoImportChange(!autoImportEnabled)}>
+            <Icon name={autoImportEnabled ? 'refresh' : 'check'} />{autoImportEnabled ? 'Stop including new sessions' : `Approve and import ${usageLabel[provider.provider ?? ''] ?? provider.display_name}`}
           </button>
         </div>
       ) : null}
@@ -74,49 +75,7 @@ export function ProviderCard({ provider, busySourceId, actionsDisabled = false, 
         <p className="provider-card__note">
           {detectionFailed ? 'Source availability is unknown until detection succeeds.' : `No local source was found for ${provider.display_name}.`}
         </p>
-      ) : (
-        <ul className="provider-card__sources">
-          {provider.sources.map((source) => {
-            const descriptionId = `source-summary-${source.source_id.replace(/[^a-zA-Z0-9_-]+/g, '-')}`;
-            const canApprove = source.scan_supported && source.state === 'discovered';
-            const canRescan = source.scan_supported && RESCANNABLE_STATES.has(source.state);
-            const busy = busySourceId === source.source_id;
-
-            return (
-              <li key={source.source_id}>
-                <p className="provider-card__source" id={descriptionId}>
-                  <span>{source.display_name}: state {source.state}.</span>{' '}
-                  {source.scan_supported ? null : 'Discovery only.'}
-                </p>
-                {canApprove ? (
-                  <button
-                    type="button"
-                    className="button button--primary"
-                    aria-describedby={descriptionId}
-                    aria-busy={busy}
-                    disabled={busy || actionsDisabled}
-                    onClick={() => onApprove(source.source_id)}
-                  >
-                    <Icon name={busy ? 'refresh' : 'check'} className={busy ? 'is-spinning' : ''} />Approve source
-                  </button>
-                ) : null}
-                {canRescan ? (
-                  <button
-                    type="button"
-                    className="button button--primary"
-                    aria-describedby={descriptionId}
-                    aria-busy={busy}
-                    disabled={busy || actionsDisabled}
-                    onClick={() => onRescan(source.source_id)}
-                  >
-                    <Icon name="refresh" className={busy ? 'is-spinning' : ''} />Rescan source
-                  </button>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      ) : null}
       <details className="provider-card__details">
         <summary>Detection details <span>{provider.confidence} confidence</span></summary>
         <p className="provider-card__evidence">Evidence: {evidenceText}. Confidence: {provider.confidence}.</p>

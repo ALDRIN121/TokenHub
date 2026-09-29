@@ -4,11 +4,12 @@ A local-first usage observatory. TokenHub detects the coding agents installed on
 this machine, imports usage from sources you explicitly approve, and
 shows agent, model, and session usage in a local explorer. Nothing leaves the machine: no provider
 API is called, no provider executable is launched, and only usage metadata is retained. Credentials and provider accounts are never
-read; transcript content is never stored or shown.
+read; transcript content is never stored or shown. Approved session files can contain chat text, which the parsers discard.
 
 Supported sources: **OpenAI Codex** session usage, **Claude Code** project and
-subagent session logs, and **Hermes Agent** session counters in its local state
-database.
+subagent session logs, **Hermes Agent** session counters in its local state
+database, **VS Code Copilot Chat** saved sessions, and **Antigravity** conversation
+databases.
 
 ## Install and run
 
@@ -39,15 +40,14 @@ cd frontend && npm ci && npm run build      # writes frontend/dist
 
 ## Automatic collection
 
-While TokenHub is running, it scans approved sources from all three providers at startup and every
-30 seconds. The dashboard refreshes itself every 10 seconds. Approving a source
-in the UI also starts its first import immediately; manual rescanning is available
-for troubleshooting. Unchanged session files are skipped. Hermes databases are checked on each scan
+While TokenHub is running, it scans approved sources from all five providers at startup and every
+30 seconds. The explorer refreshes itself every 10 seconds. Approving a provider
+in the UI also starts its first import immediately. Unchanged session files are skipped. Hermes and Antigravity databases are checked on each scan
 because active usage can live in their SQLite journal. Repeated scans do not
 increase totals. Automatic scans of unchanged data do not create extra
 import-history rows, including after restarting TokenHub.
 
-Choose **Include new sessions automatically** on a provider card to approve the discovered
+Choose **Approve and import** on a provider card to approve its discovered
 usage folder once and include both existing and future sessions automatically.
 This consent survives restarts and is pinned to the folder's device and inode;
 replacing the folder or redirecting it through a symlink cannot authorize another
@@ -57,7 +57,7 @@ approved files keep updating. Without folder consent, new files require approval
 `GET /api/v1/collection` reports the scan interval, folder-consent state, last
 completed scan, and failed-source count. Same-origin `POST` requests to
 `/api/v1/collection/{provider}/enable` and `/disable` change consent (`codex`,
-`claude_code`, or `hermes`). Responses contain
+`claude_code`, `hermes`, `vscode_copilot`, or `antigravity`). Responses contain
 no private paths. Failed sources are retried without preventing other sources
 from updating, and collection runs even when the dashboard is closed.
 
@@ -81,6 +81,23 @@ they change. Cache reads and writes are included in the input total for Claude
 and Hermes because both store them in separate buckets. Hermes session
 contributions are marked `high` quality; Claude message usage is marked `exact`.
 
+VS Code Copilot Chat imports saved `chatSessions/*.jsonl` requests from VS Code's
+workspace storage. It records each Copilot request's model, session, input tokens,
+and output tokens when VS Code saved those counters. Later session patches replace
+earlier counters; unchanged files do not add usage again. Requests without token
+counters remain unsupported rather than receiving estimated values. Cache and
+reasoning counters are not available in these saved requests. Inline suggestions,
+Copilot CLI, and Copilot activity in other editors are outside this source's scope.
+`VSCODE_USER_DATA_DIR` can point to a different VS Code user-data directory,
+such as an Insiders installation.
+
+Antigravity imports per-generation model, timestamp, input, cache-read, output,
+and reasoning counters from approved `~/.gemini/antigravity/conversations/*.db`
+files. It reads a snapshot of the database and its active journal without writing
+to the provider database. Antigravity's local metadata format is private, so
+unrecognized or inconsistent generations are excluded and reported as partial
+instead of estimated. `ANTIGRAVITY_HOME` can point to another Antigravity root.
+
 ## Discovery and approval
 
 `GET /api/v1/discovery` reports each provider's display name, connection state,
@@ -91,7 +108,9 @@ codes it found (`executable_on_path`, `known_root_exists`, `configuration_found`
 Discovery reads **presence only** — it stats candidate roots and directories and
 never opens a provider file.
 
-Reading telemetry requires two explicit steps:
+The provider card combines approval and first import in one click. It also
+enables future session imports for that provider. The lower-level API remains
+available for one-source troubleshooting:
 
 1. `POST /api/v1/sources/{source_id}/approve` persists the canonical path for
    that one source. Before approval, responses contain no absolute path at all.
@@ -105,16 +124,21 @@ Workload is input total plus output total; cache and reasoning are breakdowns,
 never extra usage. A metric the data cannot support is returned as `null` and
 rendered as an em dash — TokenHub never substitutes `0` for "unknown".
 
-The default **Usage explorer** compares Codex, Claude Code, and Hermes Agent.
+The default **Usage explorer** combines the consolidated token summary with
+agent, model, and session breakdowns for Codex, Claude Code, Hermes Agent,
+VS Code Copilot, and Antigravity. Filter by all time, today, yesterday, the last
+7 or 30 days, or a selected local calendar date.
 Choose an agent to rank its models by total, input, output, cache-read, or
 reasoning tokens. Search for a model, select it to see its sessions, and expand
 a session to compare the models used inside it. Exact counts are available on
-hover. **Overview** retains the consolidated totals.
+hover. Source health and import quality appear together under **Local sources**.
 
 `GET /api/v1/usage` returns canonical totals plus agent, model, and session
 breakdowns. Session identifiers are opaque, stable hashes; original session IDs
 and source paths are not exposed. The same Claude message deduplication is used
-by both views. Known older parsers re-read approved sources on startup to add
+throughout the explorer. Optional timezone-aware `from` and `to` query bounds
+filter usage by recorded event time; the upper bound is exclusive. Known older
+parsers re-read approved sources on startup to add
 model/session metadata without changing previously imported Codex counters.
 
 ## Data boundaries
@@ -122,7 +146,8 @@ model/session metadata without changing previously imported Codex counters.
 - Only usage metadata is normalized. Prompts, messages, tool output, transcript
   bodies, and raw provider records are never retained or returned by the API.
 - Provider credentials, API keys, `auth.json`, keychain, and cookie stores are
-  never read.
+  never read. Approved session JSONL can contain chat text; only allowlisted
+  usage fields are normalized, and raw content is never stored or returned.
 - Anything outside an approved source's own approved root: canonical-path
   validation rejects symlink escapes, and the approved root is re-validated by
   device/inode at every scan.
@@ -166,5 +191,5 @@ at a real provider path or opens a real credential store is a bug.
 - **Model attribution depends on recorded metadata.** Missing model names appear
   in “Model not recorded”. Hermes exposes session totals with a reported model;
   model switches within that session cannot be split by its current counters.
-- **No time-series view.** Session dates are observed usage dates, and all ledger
-  totals cover imported usage rather than a guessed daily allocation.
+- **No trend chart.** Date filters use observed usage timestamps. TokenHub does
+  not guess daily allocations for counters that lack event dates.

@@ -1,12 +1,16 @@
 import { Fragment, useMemo, useState } from 'react';
 import type { ModelUsage, SessionUsage, UsageBreakdown, UsageTotals } from '../types';
-import { formatMetric } from './MetricCard';
+import { formatMetric, MetricCard } from './MetricCard';
 import { Icon, type IconName } from './Icon';
+import type { UsagePeriod } from '../dateRange';
+import { UsageComposition } from './UsageComposition';
 
 const agents: { id: string; name: string; icon: IconName }[] = [
   { id: 'codex', name: 'Codex', icon: 'terminal' },
   { id: 'claude_code', name: 'Claude Code', icon: 'sparkle' },
   { id: 'hermes', name: 'Hermes Agent', icon: 'hermes' },
+  { id: 'vscode_copilot', name: 'VS Code Copilot', icon: 'copilot' },
+  { id: 'antigravity', name: 'Antigravity', icon: 'sparkle' },
 ];
 const agentName = (id: string) => agents.find((agent) => agent.id === id)?.name ?? id;
 const modelName = (name: string | null) => name ?? 'Model not recorded';
@@ -61,7 +65,13 @@ function TokenHeaders({ mode, sort, direction, onSort }: {
   })}</tr>;
 }
 
-export function UsageExplorer({ data }: { data: UsageBreakdown }) {
+export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriodChange, onSelectedDayChange }: {
+  data: UsageBreakdown;
+  period?: UsagePeriod;
+  selectedDay?: string;
+  onPeriodChange?: (period: UsagePeriod) => void;
+  onSelectedDayChange?: (day: string) => void;
+}) {
   const [provider, setProvider] = useState('all');
   const [mode, setMode] = useState<'models' | 'sessions'>('models');
   const [query, setQuery] = useState('');
@@ -121,7 +131,7 @@ export function UsageExplorer({ data }: { data: UsageBreakdown }) {
   ];
 
   return <section id="usage-explorer" className="usage-explorer panel" aria-labelledby="explorer-heading">
-    <div className="explorer-heading"><div><span className="eyebrow">THE TOKEN LEDGER</span><h2 id="explorer-heading">Agent breakdown</h2><p>Choose an agent to compare its models and sessions.</p></div><span className="ledger-period"><Icon name="layers" />All imported usage</span></div>
+    <div className="explorer-heading"><div><span className="eyebrow">THE TOKEN LEDGER</span><h2 id="explorer-heading">Agent breakdown</h2><p>Choose a date and agent to compare its models and sessions.</p></div><div className="date-filters"><label>Date range<select aria-label="Date range" value={period} onChange={(event) => onPeriodChange?.(event.target.value as UsagePeriod)}><option value="all">All time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="last7">Last 7 days</option><option value="last30">Last 30 days</option><option value="day">Choose a date</option></select></label>{period === 'day' ? <label>Usage date<input aria-label="Usage date" type="date" value={selectedDay} onChange={(event) => onSelectedDayChange?.(event.target.value)} /></label> : null}</div></div>
     <div className="agent-filters" aria-label="Filter by agent">
       <button className="agent-filter agent-filter--all" type="button" aria-pressed={provider === 'all'} onClick={() => chooseAgent('all')} aria-label="Show all agents">
         <span className="agent-filter__name"><Icon name="layers" />All agents</span><strong title={full(data.totals.workload_tokens)}>{formatMetric(data.totals.workload_tokens)}<small>tokens</small></strong><span className="agent-filter__detail">{data.totals.session_count} sessions · {data.totals.model_count} models</span><span className="agent-filter__bar"><span style={{ width: '100%' }} /></span>
@@ -130,11 +140,23 @@ export function UsageExplorer({ data }: { data: UsageBreakdown }) {
         const row = data.providers.find((item) => item.provider === agent.id);
         const share = data.totals.workload_tokens ? (row?.workload_tokens ?? 0) / data.totals.workload_tokens * 100 : 0;
         return <button key={agent.id} type="button" className={`agent-filter agent-color--${agent.id}`} aria-pressed={provider === agent.id} onClick={() => chooseAgent(agent.id)} aria-label={`Filter by ${agent.name}`}>
-          <span className="agent-filter__name"><Icon name={agent.icon} />{agent.name}<span className="agent-filter__share">{row ? percent(row.workload_tokens, data.totals.workload_tokens) : 'No imports'}</span></span>
+          <span className="agent-filter__name"><Icon name={agent.icon} />{agent.name}{row && <span className="agent-filter__share">{percent(row.workload_tokens, data.totals.workload_tokens)}</span>}</span>
           <strong title={full(row?.workload_tokens ?? null)}>{formatMetric(row?.workload_tokens)}<small>tokens</small></strong><span className="agent-filter__detail">{row?.session_count ?? 0} sessions · {row?.model_count ?? 0} models</span><span className="agent-filter__bar"><span style={{ width: `${share}%` }} /></span>
         </button>;
       })}
     </div>
+    <div className="section-heading"><h3>Token summary</h3><span className="section-meta">Selected date and agent</span></div>
+    <dl className="metric-grid">
+      <MetricCard label="Workload tokens" value={visibleSummary?.workload_tokens ?? null} icon="layers" note="Complete input + output records" featured />
+      <MetricCard label="Input tokens" value={visibleSummary?.input_total_tokens ?? null} icon="input" note="Includes cached input" />
+      <MetricCard label="Output tokens" value={visibleSummary?.output_total_tokens ?? null} icon="output" note="Includes reasoning" />
+    </dl>
+    <dl className="breakdown-grid">
+      <MetricCard label="Cache read tokens" value={visibleSummary?.cache_read_tokens ?? null} icon="cache" note="Within input" />
+      <MetricCard label="Cache write tokens" value={visibleSummary?.cache_write_tokens ?? null} icon="cache" note="Reported separately" />
+      <MetricCard label="Reasoning tokens" value={visibleSummary?.reasoning_tokens ?? null} icon="reasoning" note="Within output" />
+    </dl>
+    <div className="overview-details"><UsageComposition dashboard={visibleSummary ?? { ...data.totals, workload_tokens: null, input_total_tokens: null, output_total_tokens: null, event_count: 0 }} /><aside className="privacy-card" id="privacy-note"><span className="privacy-card__icon"><Icon name="shield" /></span><h3>Your data stays yours.</h3><p>TokenHub parses approved local usage sources and retains only usage metadata. Prompts, transcripts, credentials, and provider accounts are never stored or sent anywhere.</p><span><Icon name="check" />No data leaves this machine</span></aside></div>
     {data.totals.event_count === 0 ? <div className="explorer-empty"><Icon name="sources" /><h3>Your usage explorer starts with an import</h3><p>Connect an agent’s local sources to see models and sessions here.</p><a className="button button--primary" href="#local-sources">Connect local sources<Icon name="arrow" /></a></div> : <>
       <div className="ledger-toolbar">
         {selected ? <div className="model-breadcrumb"><button type="button" onClick={showModels}><Icon name="arrow" />All models</button><span>/</span><h3>{modelName(selected.model_name)}</h3><span className={`agent-label agent-color--${selected.provider}`}>{agentName(selected.provider)}</span></div> : <div className="ledger-tabs" aria-label="Usage grouping"><button type="button" aria-pressed={mode === 'models'} onClick={showModels}>Models <span>{models.length} groups</span></button><button type="button" aria-pressed={mode === 'sessions'} onClick={() => { switchMode('sessions'); setQuery(''); }}>Sessions <span>{summary?.session_count ?? 0}</span></button></div>}
@@ -154,7 +176,7 @@ export function UsageExplorer({ data }: { data: UsageBreakdown }) {
         {(mode === 'models' ? models.length : sessions.length) === 0 ? <div className="ledger-no-results"><h3>{query ? 'No usage matches your search' : 'No imported usage for this agent'}</h3><p>{query ? 'Try another model name or session identifier.' : 'Approve its local sources to start collecting usage.'}</p>{query ? <button type="button" className="button button--secondary" onClick={() => setQuery('')}>Clear search</button> : <a href="#local-sources">View local sources</a>}</div> : null}
       </div>
       <div className="ledger-bottom"><span>Showing {Math.min(limit, mode === 'models' ? models.length : sessions.length)} of {mode === 'models' ? models.length : sessions.length} {mode}</span>{(mode === 'models' ? models.length : sessions.length) > limit ? <button type="button" className="button button--secondary" onClick={() => setLimit(limit + 25)}>Show 25 more</button> : <span>Hover a count for the exact number.</span>}</div>
-      <div className="ledger-notes"><p><Icon name="info" /><span>Total = input + output. Cache is included in input; reasoning is included in output. Unknown values appear as —.{visibleSummary?.incomplete_event_count ? ` ${visibleSummary.incomplete_event_count} records have incomplete input or output; totals include complete records only.` : ''}</span></p>{(provider === 'all' || provider === 'hermes') && data.providers.some((row) => row.provider === 'hermes') ? <p><Icon name="hermes" /><span>Hermes records session totals with a reported model. Model switches within a session cannot be separated from these counters.</span></p> : null}{unknownModels > 0 ? <p><Icon name="quality" /><span>{unknownModels.toLocaleString('en-US')} records have no recorded model. Their tokens remain in “Model not recorded”.</span></p> : null}</div>
+      <div className="ledger-notes"><p><Icon name="info" /><span>Total = input + output. Cache is included in input; reasoning is included in output. Unknown values appear as —.{visibleSummary?.incomplete_event_count ? ` ${visibleSummary.incomplete_event_count} records have incomplete input or output; totals include complete records only.` : ''}</span></p>{(provider === 'all' || provider === 'hermes') && data.providers.some((row) => row.provider === 'hermes') ? <p><Icon name="hermes" /><span>Hermes reports session totals under one model and the session end date (or start date if still open). Model switches and usage across days cannot be separated from these counters.</span></p> : null}{(provider === 'all' || provider === 'vscode_copilot') && data.providers.some((row) => row.provider === 'vscode_copilot') ? <p><Icon name="copilot" /><span>Copilot Chat totals include only saved requests with token counters. Inline suggestions and requests without counters are not included.</span></p> : null}{(provider === 'all' || provider === 'antigravity') && data.providers.some((row) => row.provider === 'antigravity') ? <p><Icon name="quality" /><span>Antigravity usage comes from saved conversation counters. Unrecognized generations are excluded rather than estimated.</span></p> : null}{unknownModels > 0 ? <p><Icon name="quality" /><span>{unknownModels.toLocaleString('en-US')} records have no recorded model. Their tokens remain in “Model not recorded”.</span></p> : null}</div>
     </>}
   </section>;
 }

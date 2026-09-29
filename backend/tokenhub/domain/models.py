@@ -9,9 +9,11 @@ from pathlib import Path
 
 
 class Provider(StrEnum):
+    ANTIGRAVITY = "antigravity"
     CLAUDE_CODE = "claude_code"
     CODEX = "codex"
     HERMES = "hermes"
+    VSCODE_COPILOT = "vscode_copilot"
 
 
 class SourceState(StrEnum):

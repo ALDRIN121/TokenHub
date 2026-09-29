@@ -22,6 +22,7 @@ const paths = {
   terminal: 'M5 6l5 6-5 6 M13 18h6',
   sparkle: 'M12 2v20 M2 12h20 M5 5l14 14 M5 19L19 5',
   hermes: 'M6 7v10 M18 7v10 M6 12h12 M3 4h6 M15 4h6 M3 20h6 M15 20h6',
+  copilot: 'M7 8h10a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3v-6a3 3 0 0 1 3-3z M9 13h.01 M15 13h.01 M9 17c2 1 4 1 6 0 M12 8V4 M10 4h4',
 } as const;
 
 export type IconName = keyof typeof paths;

@@ -24,7 +24,9 @@ def test_discovery_never_runs_provider_executables(tmp_path: Path) -> None:
     results = ConnectorRegistry.default().discover_all(context)
 
     assert calls == ["claude", "codex", "hermes"]
-    assert all("executable_on_path" in result.evidence_codes for result in results)
+    assert all("executable_on_path" in result.evidence_codes for result in results[:3])
+    assert results[3].connector_id == "vscode-copilot-local"
+    assert "executable_on_path" not in results[3].evidence_codes
     assert all("/bin/fake" not in result.model_dump_json() for result in results)
 
 

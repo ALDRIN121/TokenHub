@@ -2,8 +2,10 @@
 
 from collections.abc import Sequence
 
+from tokenhub.connectors.antigravity.connector import AntigravityConnector
 from tokenhub.connectors.claude.connector import ClaudeConnector
 from tokenhub.connectors.codex.connector import CodexConnector
+from tokenhub.connectors.copilot.connector import CopilotConnector
 from tokenhub.connectors.hermes.connector import HermesConnector
 from tokenhub.connectors.protocol import (
     DetectionResult,
@@ -19,7 +21,7 @@ class ConnectorRegistry:
 
     @classmethod
     def default(cls) -> "ConnectorRegistry":
-        return cls([ClaudeConnector(), CodexConnector(), HermesConnector()])
+        return cls([ClaudeConnector(), CodexConnector(), HermesConnector(), CopilotConnector(), AntigravityConnector()])
 
     def discover_all(self, context: DiscoveryContext) -> list[DetectionResult]:
         results: list[DetectionResult] = []

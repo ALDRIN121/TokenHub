@@ -2,28 +2,22 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   ApiError,
-  approveSource,
-  getDashboard,
   getUsageBreakdown,
   getDataQuality,
   getCollectionStatus,
   getDiscovery,
   rebuildIndex,
-  rescanSource,
   setProviderAutoImport,
 } from './api/client';
-import { MetricCard } from './components/MetricCard';
 import { ProviderCard, RESCANNABLE_STATES } from './components/ProviderCard';
 import { Icon } from './components/Icon';
 import { UsageExplorer } from './components/UsageExplorer';
-import { UsageComposition } from './components/UsageComposition';
+import { localDay, usageDateRange, type UsagePeriod } from './dateRange';
 import type {
-  DashboardSummary,
   UsageBreakdown,
   CollectionStatus,
   DataQualityResponse,
   DiscoveryResponse,
-  ImportOutcome,
   ProviderSummary,
   RebuildOutcome,
   SourceFreshness,
@@ -44,20 +38,6 @@ function describeError(cause: unknown): string {
     return `The local server could not complete this request (status ${cause.status}). Try refreshing the data.`;
   }
   return 'TokenHub could not reach its local API. Start the local server and reload this page.';
-}
-
-function describeImport(outcome: ImportOutcome): string {
-  const parts = [
-    `Imported ${outcome.inserted_events} new events`,
-    `${outcome.duplicate_events} duplicates skipped`,
-  ];
-  if (outcome.partial_final_record) {
-    parts.push('the final record is partial and will be read on the next scan');
-  }
-  if (outcome.unsupported_records > 0) {
-    parts.push(`${outcome.unsupported_records} records were unsupported`);
-  }
-  return `${parts.join('; ')}.`;
 }
 
 function describeRebuild(outcome: RebuildOutcome): string {
@@ -115,20 +95,21 @@ function explainQuality(freshness: SourceFreshness[]): string {
   );
 }
 
-export default function App({ initialView = "explorer" }: { initialView?: "explorer" | "overview" } = {}) {
-  const [view, setView] = useState(initialView);
+export default function App() {
   const [usage, setUsage] = useState<UsageBreakdown | null>(null);
   const [discovery, setDiscovery] = useState<DiscoveryResponse | null>(null);
-  const [dashboard, setDashboard] = useState<DashboardSummary | null>(null);
   const [quality, setQuality] = useState<DataQualityResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [busySourceId, setBusySourceId] = useState<string | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeSection, setActiveSection] = useState(initialView === 'explorer' ? 'usage-explorer' : 'observed-workload');
+  const [activeSection, setActiveSection] = useState('usage-explorer');
   const [collection, setCollection] = useState<CollectionStatus | null>(null);
   const [settingAutoImport, setSettingAutoImport] = useState(false);
+  const [period, setPeriod] = useState<UsagePeriod>('all');
+  const [selectedDay, setSelectedDay] = useState(() => localDay(new Date()));
+  const usageRange = useRef(usageDateRange(period, selectedDay));
+  usageRange.current = usageDateRange(period, selectedDay);
   const refreshInFlight = useRef<Promise<void> | null>(null);
   const refreshAgain = useRef(false);
   const mounted = useRef(true);
@@ -143,9 +124,9 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
       do {
         refreshAgain.current = false;
         const requests = [
-          getDiscovery(), getDashboard(), getDataQuality(), getCollectionStatus(), getUsageBreakdown(),
+          getDiscovery(), getDataQuality(), getCollectionStatus(), getUsageBreakdown(usageRange.current),
         ] as const;
-        const [nextDiscovery, nextDashboard, nextQuality, nextCollection, nextUsage] = await Promise.all(requests)
+        const [nextDiscovery, nextQuality, nextCollection, nextUsage] = await Promise.all(requests)
           .catch(async (cause: unknown) => {
             await Promise.allSettled(requests);
             throw cause;
@@ -153,7 +134,6 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
         if (!mounted.current) return;
         if (refreshAgain.current) continue;
         setDiscovery(nextDiscovery);
-        setDashboard(nextDashboard);
         setQuality(nextQuality);
         setCollection(nextCollection);
         setUsage(nextUsage);
@@ -179,10 +159,10 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
       active = false;
       mounted.current = false;
     };
-  }, [refresh]);
+  }, [refresh, period, selectedDay]);
 
   useEffect(() => {
-    if (busySourceId !== null || rebuilding || refreshing || settingAutoImport) return;
+    if (rebuilding || refreshing || settingAutoImport) return;
     let active = true;
     let pending = false;
     const timer = window.setInterval(async () => {
@@ -198,7 +178,7 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
       }
     }, 10_000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [refresh, busySourceId, rebuilding, refreshing, settingAutoImport]);
+  }, [refresh, rebuilding, refreshing, settingAutoImport]);
 
   async function handleAutoImport(provider: ProviderSummary, enabled: boolean) {
     setError(null);
@@ -209,7 +189,7 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
       await refresh();
       setCollection(result);
       const name = provider.provider === 'codex' ? 'Codex' : provider.display_name;
-      setStatus(enabled ? `Automatic collection is enabled for existing and new ${name} sessions.` : `New ${name} sessions will need approval. Previously approved sessions keep updating automatically.`);
+      setStatus(enabled ? `Automatic collection is enabled for existing and new ${name} usage.` : `New ${name} sessions will need approval. Previously approved sessions keep updating automatically.`);
     } catch (cause: unknown) {
       setError(describeError(cause));
     } finally {
@@ -230,40 +210,6 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
     }
   }
 
-  async function handleApprove(sourceId: string) {
-    setError(null);
-    setStatus(null);
-    setBusySourceId(sourceId);
-    try {
-      const result = await approveSource(sourceId);
-      await refresh();
-      const outcome = await rescanSource(sourceId);
-      setStatus(
-        `${result.display_name} is ${result.state}. ${describeImport(outcome)} Usage will update automatically.`,
-      );
-      await refresh();
-    } catch (cause: unknown) {
-      setError(describeError(cause));
-    } finally {
-      setBusySourceId(null);
-    }
-  }
-
-  async function handleRescan(sourceId: string) {
-    setError(null);
-    setStatus(null);
-    setBusySourceId(sourceId);
-    try {
-      const outcome = await rescanSource(sourceId);
-      setStatus(describeImport(outcome));
-      await refresh();
-    } catch (cause: unknown) {
-      setError(describeError(cause));
-    } finally {
-      setBusySourceId(null);
-    }
-  }
-
   async function handleRebuild() {
     setError(null);
     setStatus(null);
@@ -279,8 +225,8 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
     }
   }
 
-  const loading = discovery === null && dashboard === null && quality === null && error === null;
-  const actionsDisabled = busySourceId !== null || rebuilding || refreshing || settingAutoImport || loading;
+  const loading = discovery === null && quality === null && usage === null && error === null;
+  const actionsDisabled = rebuilding || refreshing || settingAutoImport || loading;
   const sources = discovery?.providers.flatMap((provider) => provider.sources) ?? [];
   const approvedCount = sources.filter((source) => source.scan_supported && RESCANNABLE_STATES.has(source.state)).length;
   const detectedCount = discovery?.providers.filter((provider) => provider.evidence_codes.some((code) => code !== 'discovery_error')).length ?? 0;
@@ -298,11 +244,9 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
         <nav className="sidebar__nav" aria-label="Dashboard sections">
           {([
             ['usage-explorer', 'layers', 'Usage explorer'],
-            ['observed-workload', 'overview', 'Overview'],
             ['local-sources', 'sources', 'Local sources'],
-            ['data-quality', 'quality', 'Data quality'],
           ] as const).map(([id, icon, label]) => (
-            <a key={id} href={`#${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={() => { setActiveSection(id); if (id === "usage-explorer") setView("explorer"); if (id === "observed-workload") setView("overview"); }}>
+            <a key={id} href={`#${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={() => setActiveSection(id)}>
               <Icon name={icon} /><span>{label}</span>
             </a>
           ))}
@@ -311,19 +255,19 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
           <Icon name="shield" />
           <strong>Private by default</strong>
           <p>Your data stays on this device. No accounts. No cloud sync.</p>
-          <a href="#privacy-note" onClick={() => { setView("overview"); setActiveSection("observed-workload"); }}>How your data is handled</a>
+          <a href="#privacy-note" onClick={() => setActiveSection('usage-explorer')}>How your data is handled</a>
         </div>
         <div className="sidebar__footer"><span className="status-dot" />Local workspace</div>
       </aside>
 
       <main className="app__main" id="main-content" tabIndex={-1}>
         <div className="topbar">
-          <span className="breadcrumb">Workspace <span>/</span> <strong>{view === "explorer" ? "Usage explorer" : "Overview"}</strong></span>
+          <span className="breadcrumb">Workspace <span>/</span> <strong>Usage explorer</strong></span>
           <span className="device-pill"><Icon name="device" />On this device</span>
         </div>
         <header className="app__header">
           <div>
-            <h1>{view === "explorer" ? "Your token hub." : "Your usage, in focus."}</h1>
+            <h1>Your token hub.</h1>
             <p className="app__tagline">Token usage across your agents, models, and sessions.</p>
             {collection ? <p className="sync-status"><span className="status-dot" />Auto sync every {collection.scan_interval_seconds} seconds{collection.last_scan_at ? ` · Last checked ${formatTimestamp(collection.last_scan_at)}` : ''}</p> : null}
           </div>
@@ -342,43 +286,7 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
           </div>
         ) : null}
 
-        {view === "explorer" && usage !== null ? <UsageExplorer data={usage} /> : null}
-
-        {view === "overview" && dashboard !== null ? (
-          <section className="panel overview-panel" id="observed-workload" aria-labelledby="observed-workload-heading">
-            <div className="section-heading">
-              <h2 id="observed-workload-heading">Observed workload</h2>
-              <span className="section-meta">All imported events</span>
-            </div>
-            <dl className="metric-grid">
-              <MetricCard label="Workload tokens" value={dashboard.workload_tokens} icon="layers" note="Complete input + output records" featured />
-              <MetricCard label="Input tokens" value={dashboard.input_total_tokens} icon="input" note="Includes cached input" />
-              <MetricCard label="Output tokens" value={dashboard.output_total_tokens} icon="output" note="Includes reasoning" />
-            </dl>
-            <dl className="breakdown-grid">
-              <MetricCard label="Cache read tokens" value={dashboard.cache_read_tokens} icon="cache" note="Within input" />
-              <MetricCard label="Cache write tokens" value={dashboard.cache_write_tokens} icon="cache" note="Reported separately" />
-              <MetricCard label="Reasoning tokens" value={dashboard.reasoning_tokens} icon="reasoning" note="Within output" />
-            </dl>
-            <div className="overview-details">
-              <UsageComposition dashboard={dashboard} />
-              <aside className="privacy-card" id="privacy-note" aria-labelledby="privacy-heading">
-                <span className="privacy-card__icon"><Icon name="shield" /></span>
-                <h3 id="privacy-heading">Your data stays yours.</h3>
-                <p>TokenHub reads approved usage metadata locally. It never reads prompts, transcripts, credentials, or provider accounts.</p>
-                <span><Icon name="check" />No data leaves this machine</span>
-              </aside>
-            </div>
-            <p className="panel__footnote">Events imported: {dashboard.event_count.toLocaleString('en-US')}. Unknown values appear as an em dash.</p>
-            {dashboard.event_count === 0 ? (
-              <div className="getting-started">
-                <span className="getting-started__icon"><Icon name="sources" /></span>
-                <div><strong>Your first import starts here</strong><p>Approve a local source or enable automatic collection to start seeing your usage.</p></div>
-                <a className="button button--secondary" href="#local-sources" onClick={() => setActiveSection('local-sources')}>View local sources<Icon name="arrow" /></a>
-              </div>
-            ) : null}
-          </section>
-        ) : null}
+        {usage !== null ? <UsageExplorer data={usage} period={period} selectedDay={selectedDay} onPeriodChange={setPeriod} onSelectedDayChange={setSelectedDay} /> : null}
 
         {discovery !== null ? (
           <section className="panel" id="local-sources" aria-labelledby="local-sources-heading">
@@ -388,15 +296,11 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
             </div>
             <div className="provider-grid">
               {providers.map((provider) => (
-                <ProviderCard key={provider.connector_id} provider={provider} busySourceId={busySourceId} actionsDisabled={actionsDisabled} onApprove={handleApprove} onRescan={handleRescan} autoImportEnabled={collection?.auto_import_connectors?.includes(provider.connector_id) ?? (provider.provider === 'codex' && collection?.codex_auto_import)} onAutoImportChange={provider.provider ? (enabled) => handleAutoImport(provider, enabled) : undefined} />
+                <ProviderCard key={provider.connector_id} provider={provider} actionsDisabled={actionsDisabled} autoImportEnabled={collection?.auto_import_connectors?.includes(provider.connector_id) ?? (provider.provider === 'codex' && collection?.codex_auto_import)} onAutoImportChange={provider.provider ? (enabled) => handleAutoImport(provider, enabled) : undefined} />
               ))}
             </div>
-            <p className="source-disclaimer"><Icon name="info" />Codex, Claude Code, and Hermes Agent support local usage imports from approved sources.</p>
-          </section>
-        ) : null}
-
-        {quality !== null ? (
-          <section className="panel" id="data-quality" aria-labelledby="data-quality-heading">
+            <p className="source-disclaimer"><Icon name="info" />Codex, Claude Code, Hermes Agent, VS Code Copilot Chat, and Antigravity support local usage imports from approved sources. Copilot inline suggestions are not included.</p>
+            {quality !== null ? <section className="source-health" id="data-quality" aria-labelledby="data-quality-heading">
             <div className="section-heading">
               <div><h2 id="data-quality-heading">Data quality</h2><p className="panel__intro">Know what was read, and what is still missing.</p></div>
               <button type="button" className="button button--secondary" onClick={handleRebuild} disabled={actionsDisabled || approvedCount === 0} aria-busy={rebuilding} title={approvedCount === 0 ? 'Approve a supported source before rebuilding' : 'Re-import approved sources to rebuild the local index'}>
@@ -420,6 +324,7 @@ export default function App({ initialView = "explorer" }: { initialView?: "explo
               <p className="panel__footnote">{formatQualityCounts(quality.quality_counts)}</p>
             </div>
             {approvedCount === 0 ? <p className="panel__footnote">Rebuilding becomes available after a supported source is approved.</p> : null}
+            </section> : null}
           </section>
         ) : null}
         <footer className="app__footer"><span>TokenHub · Local usage observatory</span><span><Icon name="shield" />Observed data. No estimates.</span></footer>

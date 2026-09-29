@@ -1,5 +1,6 @@
 """Dashboard queries over observed, normalized usage only."""
 
+from datetime import datetime
 from typing import Any
 
 from tokenhub.analytics.breakdown import usage_breakdown
@@ -14,5 +15,7 @@ class AnalyticsService:
     def dashboard(self) -> DashboardSummary:
         return self.usage_repository.dashboard_totals()
 
-    def usage_breakdown(self) -> dict[str, Any]:
-        return usage_breakdown(self.usage_repository.observed_events())
+    def usage_breakdown(
+        self, start: datetime | None = None, end: datetime | None = None
+    ) -> dict[str, Any]:
+        return usage_breakdown(self.usage_repository.observed_events(start, end))

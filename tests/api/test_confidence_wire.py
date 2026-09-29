@@ -128,7 +128,7 @@ def test_discovery_body_has_no_path_credential_or_auth_marker(
         assert marker not in response.text, f"{marker!r} leaked into discovery"
 
 
-def test_api_app_fixture_reports_all_three_providers(
+def test_api_app_fixture_reports_all_five_providers(
     client: TestClient, api_app: FastAPI
 ) -> None:
     """Guards the fixture these wire assertions lean on."""
@@ -137,6 +137,8 @@ def test_api_app_fixture_reports_all_three_providers(
         "claude-code-local",
         "codex-local",
         "hermes-local",
+        "vscode-copilot-local",
+        "antigravity-local",
     }
 
 

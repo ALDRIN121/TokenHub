@@ -75,6 +75,7 @@ export function rebuildIndex(): Promise<RebuildOutcome> {
   return request<RebuildOutcome>('/rebuild', { method: 'POST' });
 }
 
-export function getUsageBreakdown(): Promise<UsageBreakdown> {
-  return request<UsageBreakdown>('/usage');
+export function getUsageBreakdown(range?: { from: string; to: string }): Promise<UsageBreakdown> {
+  const query = range ? `?${new URLSearchParams(range).toString()}` : '';
+  return request<UsageBreakdown>(`/usage${query}`);
 }
