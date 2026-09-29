@@ -53,6 +53,7 @@ class SourceRepository:
             return []
         sources: list[SourceRecord] = []
         with self.session.begin():
+            existing = self._existing_sources([candidate.source_id for candidate in candidates])
             for candidate in candidates:
                 values = {
                     "source_id": candidate.source_id,
@@ -66,6 +67,16 @@ class SourceRepository:
                     "scan_supported": candidate.scan_supported,
                     "parser_version": candidate.parser_version,
                 }
+                current = existing.get(candidate.source_id)
+                if current is not None and current.state != SourceState.UNSUPPORTED.value and all(
+                    getattr(current, key) == value
+                    for key, value in values.items()
+                    if key != "state"
+                ):
+                    # Unchanged since the last pass: a polled discovery writes nothing.
+                    self.session.expunge(current)
+                    sources.append(current)
+                    continue
                 self.session.execute(
                     insert(SourceRecord)
                     .values(**values)
@@ -82,6 +93,8 @@ class SourceRepository:
                         )},
                     )
                 )
+                if current is not None:
+                    self.session.expunge(current)
                 source = self._source(candidate.source_id)
                 self.session.expunge(source)
                 sources.append(source)
@@ -89,6 +102,21 @@ class SourceRepository:
             {candidate.source_id: candidate for candidate in candidates}
         )
         return sources
+
+    def _existing_sources(self, source_ids: list[str]) -> dict[str, SourceRecord]:
+        """Stored rows for these ids, read in chunks that fit SQLite's variable limit."""
+        found: dict[str, SourceRecord] = {}
+        for start in range(0, len(source_ids), 500):
+            chunk = source_ids[start : start + 500]
+            found.update(
+                {
+                    row.source_id: row
+                    for row in self.session.scalars(
+                        select(SourceRecord).where(SourceRecord.source_id.in_(chunk))
+                    )
+                }
+            )
+        return found
 
     def approve(self, source_id: str) -> SourceRecord:
         """Persist the validated discovery path only for a discovered source."""

@@ -308,6 +308,26 @@ def test_new_session_file_bumps_the_version_so_discovery_refreshes(
     assert len(codex['sources']) == 2
 
 
+def test_rediscovering_unchanged_sources_writes_nothing(client: TestClient) -> None:
+    from sqlalchemy import event
+
+    container = client.app.state.container
+    container.services.discovery.discover()
+    writes: list[str] = []
+
+    @event.listens_for(container._engine, 'before_cursor_execute')
+    def record(conn, cursor, statement, *args):  # noqa: ANN001
+        if statement.lstrip().upper().startswith(('INSERT', 'UPDATE', 'DELETE')):
+            writes.append(statement)
+
+    try:
+        results = container.services.discovery.discover()
+    finally:
+        event.remove(container._engine, 'before_cursor_execute', record)
+    assert writes == []
+    assert sum(len(result.sources) for result in results) > 0
+
+
 def test_discovery_walks_each_provider_tree_once(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
