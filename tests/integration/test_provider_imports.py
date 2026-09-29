@@ -381,3 +381,57 @@ def test_hermes_model_only_update_refreshes_attribution(providers):
     after = client.get('/api/v1/usage').json()
     assert after['models'][0]['model_name'] == 'model-after'
     assert after['totals'] == before['totals']
+
+
+def _spy_on_rescans(monkeypatch) -> list[str]:
+    from tokenhub.ingestion.service import IngestionService
+
+    scanned: list[str] = []
+    original = IngestionService.rescan
+
+    def rescan(self, source_id, **kwargs):
+        scanned.append(source_id)
+        return original(self, source_id, **kwargs)
+
+    monkeypatch.setattr(IngestionService, "rescan", rescan)
+    return scanned
+
+
+def test_unchanged_sqlite_source_is_skipped_until_its_journal_changes(providers, monkeypatch):
+    client, _, database = providers
+    hermes = source_id(client, "hermes-local")
+    client.post(f"/api/v1/sources/{hermes}/approve", headers=ORIGIN)
+    container = client.app.state.container
+    container.collect()
+    scanned = _spy_on_rescans(monkeypatch)
+
+    container.collect()
+    assert hermes not in scanned
+
+    # Active Hermes usage sits in the write-ahead log, not the main file.
+    database.execute("UPDATE sessions SET input_tokens=140, output_tokens=40")
+    database.commit()
+    container.collect()
+    assert hermes in scanned
+    assert client.get("/api/v1/dashboard").json()["workload_tokens"] == 260
+
+
+def test_restart_skips_unchanged_jsonl_sources_but_reads_appended_ones(
+    providers, tmp_path, monkeypatch
+):
+    client, claude, _ = providers
+    session = source_id(client, "claude-code-local")
+    client.post(f"/api/v1/sources/{session}/approve", headers=ORIGIN)
+    container = client.app.state.container
+    container.collect()
+
+    scanned = _spy_on_rescans(monkeypatch)
+    home = tmp_path / "home"
+    restarted = create_app(container.settings)
+    restarted.state.container.discovery_context = DiscoveryContext(home, {}, lambda _: None)
+    with TestClient(restarted, base_url="http://127.0.0.1:7432"):
+        assert session not in scanned
+        with claude.open("ab") as stream:
+            stream.write(claude_record("message-two"))
+        restarted.state.container.collect()
+        assert session in scanned

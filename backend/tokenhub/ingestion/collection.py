@@ -5,9 +5,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+from tokenhub.database.models import SourceRecord
 from tokenhub.database.repositories import SourceRepository, UsageRepository
 from tokenhub.discovery.service import DiscoveryService
-from tokenhub.domain.models import SourceState
+from tokenhub.domain.models import SourceState, SyncCursor
 from tokenhub.ingestion.service import IngestionService, UnsupportedSourceError
 from tokenhub.security.paths import open_source_path
 
@@ -26,7 +27,7 @@ class CollectionService:
         self.ingestion = ingestion
         self.last_scan_at: datetime | None = None
         self.failed_source_count = 0
-        self._seen_files: dict[str, tuple[int, int, int, int]] = {}
+        self._seen_files: dict[str, tuple[int, ...]] = {}
 
     def enable_codex(self) -> None:
         self.enable("codex-local")
@@ -99,16 +100,9 @@ class CollectionService:
                     metadata = os.fstat(descriptor)
                 finally:
                     os.close(descriptor)
-                identity = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+                identity = self._identity(source, metadata)
                 cursor = self.usage.current_cursor(source.source_id)
-                if (
-                    source.source_type != "sqlite"
-                    and self._seen_files.get(source.source_id) == identity
-                    and source.state in {SourceState.HEALTHY.value, SourceState.PARTIAL.value}
-                    and cursor is not None
-                    and cursor.byte_offset <= metadata.st_size
-                    and cursor.parser_version == source.parser_version
-                ):
+                if self._unchanged(source, metadata, identity, cursor):
                     continue
                 self.ingestion.rescan(source.source_id, record_unchanged=False)
                 self._seen_files[source.source_id] = identity
@@ -124,6 +118,46 @@ class CollectionService:
                 failures.add(source.source_id)
         self.failed_source_count = len(failures)
         self.last_scan_at = datetime.now(UTC)
+
+    @staticmethod
+    def _identity(source: SourceRecord, metadata: os.stat_result) -> tuple[int, ...]:
+        """Cheap change signature. SQLite sources include the write-ahead log,
+        where active sessions keep usage that the main file does not show yet."""
+        identity = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+        if source.source_type != "sqlite" or source.canonical_path is None:
+            return identity
+        try:
+            journal = os.lstat(source.canonical_path + "-wal")
+        except OSError:
+            return (*identity, -1)
+        return (*identity, journal.st_dev, journal.st_ino, journal.st_size, journal.st_mtime_ns)
+
+    def _unchanged(
+        self,
+        source: SourceRecord,
+        metadata: os.stat_result,
+        identity: tuple[int, ...],
+        cursor: SyncCursor | None,
+    ) -> bool:
+        """Whether a healthy source can be skipped without reading it.
+
+        After a restart the in-memory signature is empty, so JSONL sources also
+        match the stored cursor: it records the mtime and the byte offset it
+        finished at, which equals the size when nothing has been appended.
+        """
+        if (
+            cursor is None
+            or source.state not in {SourceState.HEALTHY.value, SourceState.PARTIAL.value}
+            or cursor.parser_version != source.parser_version
+        ):
+            return False
+        if self._seen_files.get(source.source_id) == identity and cursor.byte_offset <= metadata.st_size:
+            return True
+        return (
+            source.source_type == "jsonl"
+            and cursor.source_mtime_ns == metadata.st_mtime_ns
+            and cursor.byte_offset == metadata.st_size
+        )
 
     def status(self, interval: float) -> dict[str, object]:
         connectors = sorted(root.connector_id for root in self.sources.auto_import_roots())
