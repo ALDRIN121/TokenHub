@@ -13,7 +13,7 @@ databases.
 
 ## Install and run
 
-Requires Python 3.12 or newer. After the public package is released:
+Requires Python 3.12 or newer. Install from [PyPI](https://pypi.org/project/tokenhub/):
 
 ```bash
 pip install tokenhub
