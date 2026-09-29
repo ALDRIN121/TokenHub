@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (0.1.2)
+## 0.1.2 - 2026-09-29
 
 ### Fixed
 - Session files that a provider deleted (for example Claude Code's own cleanup)
