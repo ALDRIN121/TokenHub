@@ -113,6 +113,7 @@ export default function App() {
   usageRange.current = usageDateRange(period, selectedDay);
   const refreshInFlight = useRef<Promise<void> | null>(null);
   const refreshAgain = useRef(false);
+  const seenVersion = useRef<number | null>(null);
   const mounted = useRef(true);
 
   const refresh = useCallback(async () => {
@@ -124,10 +125,13 @@ export default function App() {
     const operation = (async () => {
       do {
         refreshAgain.current = false;
+        // Read the version first: data fetched after it can only be newer, so a
+        // change in between is picked up by the next poll instead of being missed.
+        const nextCollection = await getCollectionStatus();
         const requests = [
-          getDiscovery(), getDataQuality(), getCollectionStatus(), getUsageBreakdown(usageRange.current),
+          getDiscovery(), getDataQuality(), getUsageBreakdown(usageRange.current),
         ] as const;
-        const [nextDiscovery, nextQuality, nextCollection, nextUsage] = await Promise.all(requests)
+        const [nextDiscovery, nextQuality, nextUsage] = await Promise.all(requests)
           .catch(async (cause: unknown) => {
             await Promise.allSettled(requests);
             throw cause;
@@ -137,6 +141,7 @@ export default function App() {
         setDiscovery(nextDiscovery);
         setQuality(nextQuality);
         setCollection(nextCollection);
+        seenVersion.current = nextCollection.data_version;
         setUsage(nextUsage);
       } while (refreshAgain.current);
     })();
@@ -170,7 +175,11 @@ export default function App() {
       if (!active || pending) return;
       pending = true;
       try {
-        await refresh();
+        // Idle ticks only read the small status; the rest reloads when it changes.
+        const status = await getCollectionStatus();
+        if (!active) return;
+        if (status.data_version !== seenVersion.current) await refresh();
+        else setCollection(status);
         if (active) setError(null);
       } catch (cause: unknown) {
         if (active) setError(describeError(cause));

@@ -83,6 +83,8 @@ export interface CollectionStatus {
   auto_import_connectors?: string[];
   last_scan_at: string | null;
   failed_source_count: number;
+  /** Changes only when discovery, source states, or usage may have changed. */
+  data_version: number;
 }
 
 export interface UsageTotals {

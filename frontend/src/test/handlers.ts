@@ -23,17 +23,17 @@ function refusesWithoutOrigin(request: Request): Response | null {
 }
 
 export const handlers = [
-  http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: false, last_scan_at: null, failed_source_count: 0 })),
+  http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: false, last_scan_at: null, failed_source_count: 0, data_version: 1 })),
   http.post('/api/v1/collection/refresh', ({ request }) => {
     const refusal = refusesWithoutOrigin(request);
     if (refusal !== null) return refusal;
-    return HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: false, auto_import_connectors: [], last_scan_at: '2026-09-29T08:30:00+00:00', failed_source_count: 0 });
+    return HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: false, auto_import_connectors: [], last_scan_at: '2026-09-29T08:30:00+00:00', failed_source_count: 0, data_version: 1 });
   }),
   http.post('/api/v1/collection/:provider/:action', ({ request, params }) => {
     const refusal = refusesWithoutOrigin(request);
     if (refusal !== null) return refusal;
     const connectors: Record<string, string> = { codex: 'codex-local', claude_code: 'claude-code-local', hermes: 'hermes-local' };
-    return HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: params.provider === 'codex' && params.action === 'enable', auto_import_connectors: params.action === 'enable' ? [connectors[String(params.provider)]] : [], last_scan_at: null, failed_source_count: 0 });
+    return HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: params.provider === 'codex' && params.action === 'enable', auto_import_connectors: params.action === 'enable' ? [connectors[String(params.provider)]] : [], last_scan_at: null, failed_source_count: 0, data_version: 1 });
   }),
   http.get('/api/v1/discovery', () => HttpResponse.json(discoveryFixture)),
   http.get('/api/v1/usage', () => HttpResponse.json(usageFixture)),

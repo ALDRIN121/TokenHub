@@ -16,11 +16,11 @@ describe('TokenHub client', () => {
     let lastScan: string | null = null;
     server.use(
       http.get('/api/v1/usage', () => HttpResponse.json({ ...usageFixture, totals: { ...usageFixture.totals, workload_tokens: workload } })),
-      http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: true, auto_import_connectors: ['codex-local'], last_scan_at: lastScan, failed_source_count: 0 })),
+      http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: true, auto_import_connectors: ['codex-local'], last_scan_at: lastScan, failed_source_count: 0, data_version: workload })),
       http.post('/api/v1/collection/refresh', () => {
         workload = 140;
         lastScan = '2026-09-29T08:30:00+00:00';
-        return HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: true, auto_import_connectors: ['codex-local'], last_scan_at: lastScan, failed_source_count: 0 });
+        return HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: true, auto_import_connectors: ['codex-local'], last_scan_at: lastScan, failed_source_count: 0, data_version: workload });
       }),
     );
     render(<App />);
@@ -42,7 +42,9 @@ describe('TokenHub client', () => {
     let polling: Promise<void> | undefined;
     try {
       await screen.findByRole('table', { name: 'Model usage' });
+      let version = 1;
       server.use(
+        http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: false, auto_import_connectors: [], last_scan_at: null, failed_source_count: 0, data_version: ++version })),
         http.get('/api/v1/discovery', () => {
           failedResponse = true;
           return new HttpResponse(null, { status: 503 });
@@ -57,7 +59,8 @@ describe('TokenHub client', () => {
       polling = (call[0] as () => Promise<void>)();
       await waitFor(() => expect(failedResponse).toBe(true));
       await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh data' }));
-      expect(fetches.mock.calls.length - initialCalls).toBe(5);
+      // The tick's status read, its refresh (status + 3 requests), and the manual scan.
+      expect(fetches.mock.calls.length - initialCalls).toBe(6);
     } finally {
       finish();
       await act(async () => { await polling; });
@@ -76,15 +79,19 @@ describe('TokenHub client', () => {
     let polling: Promise<void> | undefined;
     try {
       await screen.findByRole('table', { name: 'Model usage' });
-      server.use(http.get('/api/v1/discovery', async () => {
-        await pending;
-        return HttpResponse.json(discoveryFixture);
-      }));
+      let version = 1;
+      server.use(
+        http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: false, auto_import_connectors: [], last_scan_at: null, failed_source_count: 0, data_version: ++version })),
+        http.get('/api/v1/discovery', async () => {
+          await pending;
+          return HttpResponse.json(discoveryFixture);
+        }),
+      );
       const call = timers.mock.calls.find(([, delay]) => delay === 10_000)!;
       const initialCalls = fetches.mock.calls.length;
       polling = (call[0] as () => Promise<void>)();
       await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh data' }));
-      expect(fetches.mock.calls.length - initialCalls).toBe(5);
+      expect(fetches.mock.calls.length - initialCalls).toBe(6);
     } finally {
       finish();
       await act(async () => { await polling; });
@@ -98,13 +105,18 @@ describe('TokenHub client', () => {
     const timers = vi.spyOn(window, 'setInterval');
     const cleanup = vi.spyOn(window, 'clearInterval');
     let workload = 125;
-    server.use(http.get('/api/v1/usage', () => HttpResponse.json({ ...usageFixture, totals: { ...usageFixture.totals, workload_tokens: workload } })));
+    let version = 1;
+    server.use(
+      http.get('/api/v1/usage', () => HttpResponse.json({ ...usageFixture, totals: { ...usageFixture.totals, workload_tokens: workload } })),
+      http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: false, auto_import_connectors: [], last_scan_at: null, failed_source_count: 0, data_version: version })),
+    );
     const view = render(<App />);
     try {
       await screen.findByRole('table', { name: 'Model usage' });
       const call = timers.mock.calls.find(([, delay]) => delay === 10_000);
       expect(call).toBeDefined();
       workload = 10_000;
+      version = 2;
       await act(async () => { await (call![0] as () => Promise<void>)(); });
       expect(within(screen.getByText('Workload tokens').parentElement!).getByText('10K')).toHaveAttribute('title', '10,000');
       view.unmount();
@@ -113,6 +125,26 @@ describe('TokenHub client', () => {
       view.unmount();
       timers.mockRestore();
       cleanup.mockRestore();
+    }
+  });
+
+  it('reads only the small status while nothing has changed', async () => {
+    const timers = vi.spyOn(window, 'setInterval');
+    const fetches = vi.spyOn(globalThis, 'fetch');
+    const view = render(<App />);
+    try {
+      await screen.findByRole('table', { name: 'Model usage' });
+      const call = timers.mock.calls.find(([, delay]) => delay === 10_000)!;
+      const before = fetches.mock.calls.length;
+      await act(async () => { await (call[0] as () => Promise<void>)(); });
+      await act(async () => { await (call[0] as () => Promise<void>)(); });
+      const urls = fetches.mock.calls.slice(before).map(([input]) => String(input instanceof Request ? input.url : input));
+      expect(urls).toHaveLength(2);
+      expect(urls.every((url) => url.endsWith('/api/v1/collection'))).toBe(true);
+    } finally {
+      view.unmount();
+      timers.mockRestore();
+      fetches.mockRestore();
     }
   });
 
@@ -138,14 +170,14 @@ describe('TokenHub client', () => {
       http.get('/api/v1/collection', () => HttpResponse.json({
         scan_interval_seconds: 30, codex_auto_import: false,
         auto_import_connectors: enabled ? ['vscode-copilot-local'] : [],
-        last_scan_at: null, failed_source_count: 0,
+        last_scan_at: null, failed_source_count: 0, data_version: 1,
       })),
       http.post('/api/v1/collection/vscode_copilot/enable', () => {
         enabled = true;
         return HttpResponse.json({
           scan_interval_seconds: 30, codex_auto_import: false,
           auto_import_connectors: ['vscode-copilot-local'],
-          last_scan_at: null, failed_source_count: 0,
+          last_scan_at: null, failed_source_count: 0, data_version: 1,
         });
       }),
     );
@@ -203,13 +235,13 @@ describe('TokenHub client', () => {
       http.get('/api/v1/discovery', () => HttpResponse.json({ providers: [provider] })),
       http.get('/api/v1/collection', () => HttpResponse.json({
         scan_interval_seconds: 30, codex_auto_import: enabled && providerId === 'codex',
-        auto_import_connectors: enabled ? [connectorId] : [], last_scan_at: null, failed_source_count: 0,
+        auto_import_connectors: enabled ? [connectorId] : [], last_scan_at: null, failed_source_count: 0, data_version: 1,
       })),
       http.post(`/api/v1/collection/${providerId}/enable`, () => {
         enabled = true;
         return HttpResponse.json({
           scan_interval_seconds: 30, codex_auto_import: providerId === 'codex',
-          auto_import_connectors: [connectorId], last_scan_at: null, failed_source_count: 0,
+          auto_import_connectors: [connectorId], last_scan_at: null, failed_source_count: 0, data_version: 1,
         });
       }),
     );
