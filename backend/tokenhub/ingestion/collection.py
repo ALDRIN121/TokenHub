@@ -27,10 +27,13 @@ class CollectionService:
         self.ingestion = ingestion
         self.last_scan_at: datetime | None = None
         self.failed_source_count = 0
+        #: Increases whenever data the UI shows may have changed; an idle scan
+        #: leaves it alone so clients can poll it instead of refetching everything.
+        self.data_version = 0
         self._seen_files: dict[str, tuple[int, ...]] = {}
 
-    def enable_codex(self) -> None:
-        self.enable("codex-local")
+    def bump(self) -> None:
+        self.data_version += 1
 
     def enable(self, connector_id: str) -> None:
         results = self.discovery.discover()
@@ -45,11 +48,13 @@ class CollectionService:
         if candidate is None:
             raise UnsupportedSourceError("no supported source was discovered")
         self.sources.enable_auto_import(candidate)
+        self.bump()
         self.run_once()
 
     def run_once(self, should_stop: Callable[[], bool] = lambda: False) -> None:
         """Scan once; ``should_stop`` is checked between sources so shutdown stays prompt."""
         failures: set[str] = set()
+        changed = False
         roots = {root.connector_id: root for root in self.sources.auto_import_roots()}
         for result in self.discovery.discover():
             root = roots.get(result.connector_id)
@@ -69,9 +74,11 @@ class CollectionService:
                     continue
                 try:
                     self.ingestion.approve(view.source_id)
+                    changed = True
                 except Exception:  # noqa: BLE001 - isolate one source's approval failure
                     self.sources.session.rollback()
                     failures.add(view.source_id)
+                    changed = True
 
         for source in self.sources.approved_sources():
             if should_stop():
@@ -106,16 +113,21 @@ class CollectionService:
                     continue
                 self.ingestion.rescan(source.source_id, record_unchanged=False)
                 self._seen_files[source.source_id] = identity
+                changed = True
             except FileNotFoundError:
+                changed = True
                 # A removed source is not a failure: the provider deleted it.
                 self._seen_files.pop(source.source_id, None)
                 self.sources.session.rollback()
                 self.sources.set_state(source.source_id, SourceState.SOURCE_MISSING)
             except Exception:  # noqa: BLE001 - one bad source must not starve the others
+                changed = True
                 self._seen_files.pop(source.source_id, None)
                 self.sources.session.rollback()
                 self.sources.set_state(source.source_id, SourceState.ERROR)
                 failures.add(source.source_id)
+        if changed or len(failures) != self.failed_source_count:
+            self.bump()
         self.failed_source_count = len(failures)
         self.last_scan_at = datetime.now(UTC)
 
@@ -167,4 +179,5 @@ class CollectionService:
             "auto_import_connectors": connectors,
             "last_scan_at": self.last_scan_at.isoformat() if self.last_scan_at else None,
             "failed_source_count": self.failed_source_count,
+            "data_version": self.data_version,
         }

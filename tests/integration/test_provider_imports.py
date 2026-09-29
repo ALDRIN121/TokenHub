@@ -156,6 +156,8 @@ def test_existing_hermes_detection_is_upgraded_to_importable(providers):
     source = source_id(client, "hermes-local")
     services = client.app.state.container.services
     services.source_repository.set_state(source, SourceState.UNSUPPORTED)
+    # An out-of-band database edit: signal it as the collector or a route would.
+    services.collection.bump()
     source = source_id(client, "hermes-local")
     assert (
         client.post(f"/api/v1/sources/{source}/approve", headers=ORIGIN).status_code

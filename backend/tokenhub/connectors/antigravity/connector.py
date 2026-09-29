@@ -11,6 +11,7 @@ from tokenhub.connectors.protocol import (
     SafeSourceView,
     ScanResult,
     find_root,
+    memoized_sources,
 )
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
@@ -50,6 +51,7 @@ class AntigravityConnector:
             sources=tuple(SafeSourceView.model_validate(source.safe_view()) for source in sources),
         )
 
+    @memoized_sources
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
         root = find_root(
             context, "ANTIGRAVITY_HOME", ".gemini/antigravity", marker="conversations", canonicalize=False

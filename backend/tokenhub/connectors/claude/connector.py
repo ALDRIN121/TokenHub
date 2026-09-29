@@ -13,6 +13,7 @@ from tokenhub.connectors.protocol import (
     SafeSourceView,
     ScanResult,
     find_root,
+    memoized_sources,
 )
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
@@ -58,6 +59,7 @@ class ClaudeConnector:
             ),
         )
 
+    @memoized_sources
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
         root = find_root(context, "CLAUDE_CONFIG_DIR", ".claude", marker="projects", canonicalize=False)
         projects = root / "projects"

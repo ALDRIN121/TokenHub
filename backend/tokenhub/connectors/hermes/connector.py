@@ -11,6 +11,7 @@ from tokenhub.connectors.protocol import (
     SafeSourceView,
     ScanResult,
     find_root,
+    memoized_sources,
 )
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
@@ -48,6 +49,7 @@ class HermesConnector:
             ),
         )
 
+    @memoized_sources
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
         root = find_root(context, "HERMES_HOME", ".hermes", marker="state.db", canonicalize=False)
         if not root.is_dir() or root.is_symlink():

@@ -57,6 +57,8 @@ class Container:
         self._engine: Engine | None = None
         self._services: Services | None = None
         self._discovery_context: DiscoveryContext | None = None
+        #: The ``data_version`` the cached discovery results correspond to.
+        self.discovery_version = -1
         self.collection_thread: threading.Thread | None = None
         self._collection_stop = threading.Event()
 
@@ -99,6 +101,8 @@ class Container:
         self._engine = engine
         discovery = DiscoveryService(registry, source_repository, self.discovery_context)
         ingestion = IngestionService(source_repository, usage_repository, registry)
+        collection = CollectionService(source_repository, usage_repository, discovery, ingestion)
+        discovery.on_change = collection.bump
         self._services = Services(
             session=session,
             source_repository=source_repository,
@@ -106,7 +110,7 @@ class Container:
             discovery=discovery,
             ingestion=ingestion,
             analytics=AnalyticsService(usage_repository),
-            collection=CollectionService(source_repository, usage_repository, discovery, ingestion),
+            collection=collection,
         )
         self._collect_safely()
         self._collection_stop.clear()

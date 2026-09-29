@@ -15,6 +15,7 @@ from tokenhub.connectors.protocol import (
     SafeSourceView,
     ScanResult,
     find_root,
+    memoized_sources,
 )
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
@@ -77,6 +78,7 @@ class CopilotConnector:
             sources=tuple(SafeSourceView.model_validate(source.safe_view()) for source in sources),
         )
 
+    @memoized_sources
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
         root = _user_data_dir(context) / "User" / "workspaceStorage"
         if not root.is_dir() or root.is_symlink():

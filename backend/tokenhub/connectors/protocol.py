@@ -1,10 +1,11 @@
 """Provider-neutral connector contracts and path-free discovery results."""
 
+import functools
 import os
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel, computed_field
 
@@ -26,6 +27,28 @@ class DiscoveryContext:
     which: Callable[[str], str | None]
     # Extra bases (other drives, redirected profiles) searched after ``home``.
     search_roots: tuple[Path, ...] = ()
+    # Set by one discovery pass so ``detect`` and ``discover_sources`` share a
+    # single directory walk. ``None`` (the default) disables sharing.
+    source_memo: dict[str, list[SourceDescriptor]] | None = field(
+        default=None, compare=False, repr=False
+    )
+
+
+def memoized_sources(
+    method: Callable[[Any, DiscoveryContext], list[SourceDescriptor]],
+) -> Callable[[Any, DiscoveryContext], list[SourceDescriptor]]:
+    """Reuse a connector's source walk within one discovery pass."""
+
+    @functools.wraps(method)
+    def wrapper(self: Any, context: DiscoveryContext) -> list[SourceDescriptor]:
+        memo = context.source_memo
+        if memo is None:
+            return method(self, context)
+        if self.connector_id not in memo:
+            memo[self.connector_id] = method(self, context)
+        return list(memo[self.connector_id])
+
+    return wrapper
 
 
 class SafeSourceView(BaseModel):

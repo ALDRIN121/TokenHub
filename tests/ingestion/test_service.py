@@ -77,7 +77,7 @@ def exercise_discovery_swap(
                 swap_root()
         return original_resolve(path, strict=strict)
 
-    def swap_after_second_anchor_open(
+    def swap_after_anchor_open(
         path: str | bytes | Path,
         flags: int,
         mode: int = 0o777,
@@ -90,20 +90,21 @@ def exercise_discovery_swap(
             Path(os.fsdecode(path)) if isinstance(path, bytes) else Path(path)
         )
         anchor_component = Path(".codex" if swap_ancestor else "sessions")
-        # The old implementation calls resolve first; the open hook is for the
-        # anchored implementation and fires only when no root resolve occurred.
+        # Discovery walks each tree once per pass, so swap right after the root
+        # is anchored. The old implementation calls resolve first; this hook is
+        # for the anchored implementation and fires only when none occurred.
         if (
             resolve_calls == 0
             and dir_fd is not None
             and lexical_path == anchor_component
         ):
             anchor_opens += 1
-            if anchor_opens == 2:
+            if anchor_opens == 1:
                 swap_root()
         return descriptor
 
     monkeypatch.setattr(Path, "resolve", swap_on_second_resolve)
-    monkeypatch.setattr(os, "open", swap_after_second_anchor_open)
+    monkeypatch.setattr(os, "open", swap_after_anchor_open)
     monkeypatch.setattr(codex_parser, "parse_codex_jsonl", forbid_provider_open)
 
     results = app_services.discovery.discover()

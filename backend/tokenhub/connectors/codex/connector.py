@@ -13,6 +13,7 @@ from tokenhub.connectors.protocol import (
     SafeSourceView,
     ScanResult,
     find_root,
+    memoized_sources,
 )
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
@@ -55,6 +56,7 @@ class CodexConnector:
             ),
         )
 
+    @memoized_sources
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
         root = find_root(context, "CODEX_HOME", ".codex", marker="sessions", canonicalize=False)
         sessions = root / "sessions"

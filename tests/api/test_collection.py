@@ -257,6 +257,74 @@ def test_removed_source_is_missing_not_failed_and_keeps_usage(
     assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 125
 
 
+def test_idle_polling_neither_walks_the_filesystem_nor_bumps_the_version(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tokenhub.discovery.service import DiscoveryService
+
+    client.post('/api/v1/collection/codex/enable', headers=ORIGIN)
+    container = client.app.state.container
+    container.collect()
+    assert client.get('/api/v1/discovery').status_code == 200
+    version = client.get('/api/v1/collection').json()['data_version']
+
+    walks: list[int] = []
+    original = DiscoveryService.discover
+    monkeypatch.setattr(
+        DiscoveryService, 'discover', lambda self: walks.append(1) or original(self)
+    )
+    for _ in range(3):
+        assert client.get('/api/v1/discovery').status_code == 200
+        assert client.get('/api/v1/collection').json()['data_version'] == version
+    assert walks == []
+
+    container.collect()  # a scan that finds nothing new is still a discovery pass
+    assert walks == [1]
+    assert client.get('/api/v1/collection').json()['data_version'] == version
+
+    with (tmp_path / 'home/.codex/sessions/synthetic.jsonl').open('ab') as stream:
+        stream.write(token_record(2, input_tokens=10, output_tokens=5))
+    container.collect()
+    changed = client.get('/api/v1/collection').json()['data_version']
+    assert changed > version
+    client.get('/api/v1/discovery')
+    assert len(walks) == 3  # the collector's pass, then one refresh for the new version
+    client.get('/api/v1/discovery')
+    assert len(walks) == 3
+
+
+def test_new_session_file_bumps_the_version_so_discovery_refreshes(
+    client: TestClient, tmp_path: Path
+) -> None:
+    container = client.app.state.container
+    container.collect()
+    before = client.get('/api/v1/collection').json()['data_version']
+    (tmp_path / 'home/.codex/sessions/fresh.jsonl').write_bytes(
+        token_record(1, input_tokens=4, output_tokens=6)
+    )
+    container.collect()
+    assert client.get('/api/v1/collection').json()['data_version'] > before
+    codex = client.get('/api/v1/discovery').json()['providers'][1]
+    assert len(codex['sources']) == 2
+
+
+def test_discovery_walks_each_provider_tree_once(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tokenhub.connectors.codex.connector as codex_connector
+
+    anchors: list[int] = []
+    original = codex_connector.anchor_directory
+
+    def counted(root: Path):
+        anchors.append(1)
+        return original(root)
+
+    monkeypatch.setattr(codex_connector, 'anchor_directory', counted)
+    client.app.state.container.services.discovery.discover()
+    assert anchors == [1]
+
+
 def test_shutdown_interrupts_a_scan_between_sources(client: TestClient, tmp_path: Path) -> None:
     client.post('/api/v1/collection/codex/enable', headers=ORIGIN)
     sessions = tmp_path / 'home/.codex/sessions'

@@ -131,7 +131,13 @@ def discovery(request: Request) -> dict[str, object]:
     """Report detected providers. Presence only — no source file is read."""
     container = container_for(request)
     with container.lock:
-        results = container.services.discovery.discover()
+        # The collector rediscovers every scan interval and any change bumps
+        # data_version, so a poll between changes needs no filesystem walk.
+        services = container.services
+        results = services.discovery.last_results
+        if results is None or container.discovery_version != services.collection.data_version:
+            results = services.discovery.discover()
+            container.discovery_version = services.collection.data_version
     return {
         "providers": [
             {
@@ -200,6 +206,7 @@ def disable_provider_collection(provider: str, request: Request) -> dict[str, ob
     connector_id = _collection_connector(provider)
     with container.lock:
         container.services.source_repository.disable_auto_import(connector_id)
+        container.services.collection.bump()
         return container.services.collection.status(container.settings.scan_interval_seconds)
 
 
@@ -210,6 +217,7 @@ def approve_source(source_id: str, request: Request) -> dict[str, object]:
     with container.lock:
         try:
             source = container.services.ingestion.approve(source_id)
+            container.services.collection.bump()
         except Exception as error:  # mapped to a safe status below
             raise _service_failure(error) from error
     return _approval_payload(source)
@@ -222,6 +230,7 @@ def rescan_source(source_id: str, request: Request) -> dict[str, object]:
     with container.lock:
         try:
             outcome = container.services.ingestion.rescan(source_id)
+            container.services.collection.bump()
         except Exception as error:  # mapped to a safe status below
             raise _service_failure(error) from error
     return _import_payload(outcome)
@@ -234,6 +243,7 @@ def rebuild(request: Request) -> dict[str, object]:
     with container.lock:
         try:
             outcome: RebuildOutcome = container.services.ingestion.rebuild()
+            container.services.collection.bump()
         except Exception as error:  # mapped to a safe status below
             raise _service_failure(error) from error
     return {
