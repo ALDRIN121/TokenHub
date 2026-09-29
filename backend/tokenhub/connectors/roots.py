@@ -38,9 +38,9 @@ def candidate_roots(
     for key in keys:
         if value := environment.get(key):
             ordered.append(Path(value))
-    if drive := environment.get("HOMEDRIVE"):
-        if path := environment.get("HOMEPATH"):
-            ordered.append(Path(drive + path))
+    home_drive, home_path = environment.get("HOMEDRIVE"), environment.get("HOMEPATH")
+    if home_drive and home_path:
+        ordered.append(Path(home_drive + home_path))
     user = current_user or environment.get("USERNAME") or environment.get("USER")
     if platform == "win32" and user:
         ordered.extend(drive_root / "Users" / user for drive_root in list_drives())

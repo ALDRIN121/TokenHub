@@ -29,7 +29,9 @@ def test_candidate_roots_on_windows_cover_each_drive_for_current_user_only(tmp_p
     for path in (home, d_profile, other_profile, appdata):
         path.mkdir(parents=True)
     environment = {"USERPROFILE": str(home), "APPDATA": str(appdata), "USERNAME": "me"}
-    drives = lambda: (tmp_path / "c", tmp_path / "d", tmp_path / "e")  # noqa: E731
+
+    def drives() -> tuple[Path, ...]:
+        return (tmp_path / "c", tmp_path / "d", tmp_path / "e")
 
     roots = candidate_roots(environment, home, platform="win32", list_drives=drives)
 
