@@ -106,7 +106,7 @@ class RuntimeManager:
                     buffering=0,
                 ) as log_file:
                     if os.name == "posix":
-                        os.fchmod(log_file.fileno(), 0o600)
+                        os.fchmod(log_file.fileno(), 0o600)  # type: ignore[attr-defined]
                     child = subprocess.Popen(
                         [sys.executable, "-m", "tokenhub", "_serve", str(selected_port)],
                         env={**os.environ, "TOKENHUB_INTERNAL_CONTROL_TOKEN": token},

@@ -35,11 +35,16 @@ def anchor_directory(root: Path) -> Iterator[AnchoredDirectory]:
         raise ValueError("approved root cannot be opened safely") from error
     try:
         root_stat = os.fstat(descriptor)
+        identity = (
+            windows_paths.storage_identity(root_stat)
+            if os.name == "nt"
+            else (root_stat.st_dev, root_stat.st_ino)
+        )
         yield AnchoredDirectory(
             path=root,
             descriptor=descriptor,
-            device=root_stat.st_dev,
-            inode=root_stat.st_ino,
+            device=identity[0],
+            inode=identity[1],
         )
     finally:
         os.close(descriptor)
@@ -171,7 +176,7 @@ def _open_directory(path: Path | str, parent_descriptor: int | None = None) -> i
         if parent_descriptor is None:
             return windows_paths.open_absolute_directory(Path(path))
         return windows_paths.open_directory_entry(str(path), parent_descriptor)
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags, dir_fd=parent_descriptor)
     try:
         if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
@@ -188,7 +193,7 @@ def _validate_child_name(name: str) -> None:
 
 
 def _open_regular_file(name: str, parent_descriptor: int) -> int:
-    flags = os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(name, flags, dir_fd=parent_descriptor)
     try:
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):

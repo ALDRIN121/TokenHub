@@ -25,6 +25,17 @@ _REPARSE_ATTRIBUTE = 0x00000400
 _INVALID_HANDLE = ctypes.c_void_p(-1).value
 
 
+def sqlite_file_id(value: int) -> int:
+    """Map a Windows unsigned 64-bit file ID bijectively into SQLite's signed range."""
+    if not 0 <= value < 2**64:
+        raise ValueError("filesystem identity exceeds 64 bits")
+    return value if value < 2**63 else value - 2**64
+
+
+def storage_identity(metadata: os.stat_result) -> tuple[int, int]:
+    return sqlite_file_id(metadata.st_dev), sqlite_file_id(metadata.st_ino)
+
+
 def is_beneath(child: str, parent: str) -> bool:
     """Compare Windows path components, including case and drive semantics."""
     normalized_child = ntpath.normcase(ntpath.normpath(child))
@@ -196,8 +207,7 @@ def open_source_path(
 
 
 def _identity(descriptor: int) -> tuple[int, int]:
-    metadata = os.fstat(descriptor)
-    return metadata.st_dev, metadata.st_ino
+    return storage_identity(os.fstat(descriptor))
 
 
 def _identity_at(path: Path) -> tuple[int, int]:

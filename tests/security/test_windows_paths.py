@@ -5,13 +5,22 @@ import stat
 from pathlib import Path
 
 import pytest
-from tokenhub.security.windows_paths import is_beneath
+from tokenhub.security.windows_paths import is_beneath, sqlite_file_id
 
 
 def test_windows_path_containment_uses_components_and_casefolding():
     assert is_beneath(r"C:\Users\me\approved\file.json", r"c:\users\ME\approved")
     assert not is_beneath(r"C:\Users\me\approved-other\file.json", r"C:\Users\me\approved")
     assert not is_beneath(r"D:\Users\me\approved\file.json", r"C:\Users\me\approved")
+
+
+def test_windows_file_ids_fit_sqlite_without_losing_identity():
+    assert sqlite_file_id(0) == 0
+    assert sqlite_file_id(2**63 - 1) == 2**63 - 1
+    assert sqlite_file_id(2**63) == -(2**63)
+    assert sqlite_file_id(2**64 - 1) == -1
+    with pytest.raises(ValueError):
+        sqlite_file_id(2**64)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires Windows handle APIs")

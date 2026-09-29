@@ -72,9 +72,9 @@ def cursor_for(byte_offset: int) -> SyncCursor:
     )
 
 
-def test_discovery_does_not_persist_path_until_approval(session: Session) -> None:
+def test_discovery_does_not_persist_path_until_approval(session: Session, tmp_path: Path) -> None:
     """Fails if discovery writes a pre-approval absolute path to SQLite."""
-    candidate = synthetic_codex_candidate(Path("/tmp/fake/sessions/a.jsonl"))
+    candidate = synthetic_codex_candidate(tmp_path / "fake" / "sessions" / "a.jsonl")
 
     source = SourceRepository(session).upsert_discovery(candidate)
 

@@ -40,6 +40,7 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --frozen --all-groups
       - name: Test and type check
+        shell: bash
         run: |
           uv run --frozen pytest -q
           uv run --frozen pytest tests/integration -m integration -q
