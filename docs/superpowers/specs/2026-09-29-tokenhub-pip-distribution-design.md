@@ -1,6 +1,6 @@
 # Token Hub pip Distribution and Local Background Dashboard
 
-**Status:** Design approved in conversation; written spec awaiting review.
+**Status:** Reviewed and approved for implementation planning.
 
 ## Goal and user intent
 
@@ -44,7 +44,7 @@ The React/Vite build produces compiled assets inside `backend/tokenhub/web/`, wh
 
 Alembic is configured from installed package paths rather than from the repository-level `backend/alembic.ini`. The migration Python files already present in the wheel stay inside the package. The application database and approved-source state stay in the user's data directory through package upgrades and removals.
 
-The package declares its Python requirement, runtime dependencies, console entry point, MIT license, and release version in `pyproject.toml`. A root `LICENSE` file contains the MIT license text and is included in release artifacts. The project name for the first upload is `tokenhub`; release preparation checks that PyPI accepts that name before upload.
+The package declares its Python requirement, runtime dependencies, console entry point, MIT license, and release version in `pyproject.toml`. A root `LICENSE` file contains the MIT license text with `Copyright (c) 2026 Aldrin Joseph` and is included in release artifacts. The project name for the first upload is `tokenhub`; release preparation checks that PyPI accepts that name before upload.
 
 ## Failure behavior
 
