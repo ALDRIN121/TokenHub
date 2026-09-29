@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 - 2026-09-29
 
 ### Fixed
 - Antigravity generations with no cached or thinking tokens were rejected as
