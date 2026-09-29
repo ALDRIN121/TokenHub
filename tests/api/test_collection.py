@@ -216,6 +216,47 @@ def test_unexpected_source_failure_does_not_starve_other_sources(
     assert client.get('/api/v1/collection').json()['failed_source_count'] == 0
 
 
+def test_removed_source_is_missing_not_failed_and_keeps_usage(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tokenhub.ingestion.collection as collection_module
+
+    source_id = codex_id(client)
+    client.post('/api/v1/collection/codex/enable', headers=ORIGIN)
+    container = client.app.state.container
+    session_file = tmp_path / 'home/.codex/sessions/synthetic.jsonl'
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+
+    session_file.unlink()
+    container.collect()
+    quality = client.get('/api/v1/data-quality').json()
+    states = {item['source_id']: item['state'] for item in quality['source_freshness']}
+    assert states[source_id] == 'source_missing'
+    assert 'error' not in states.values()
+    assert client.get('/api/v1/collection').json()['failed_source_count'] == 0
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+
+    opened: list[object] = []
+    original = collection_module.open_source_path
+    monkeypatch.setattr(
+        collection_module, 'open_source_path',
+        lambda *args, **kwargs: opened.append(args) or original(*args, **kwargs),
+    )
+    container.collect()
+    assert opened == []
+    assert client.get('/api/v1/collection').json()['failed_source_count'] == 0
+
+    session_file.write_bytes(token_record(1, input_tokens=100, output_tokens=25))
+    container.collect()
+    assert opened
+    states = {
+        item['source_id']: item['state']
+        for item in client.get('/api/v1/data-quality').json()['source_freshness']
+    }
+    assert states[source_id] == 'healthy'
+    assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 125
+
+
 def test_retry_recovers_when_source_identity_is_unchanged(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

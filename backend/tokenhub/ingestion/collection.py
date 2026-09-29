@@ -71,6 +71,15 @@ class CollectionService:
         for source in self.sources.approved_sources():
             if not source.scan_supported:
                 continue
+            if (
+                source.state == SourceState.SOURCE_MISSING.value
+                and source.canonical_path is not None
+                and not os.path.lexists(source.canonical_path)
+            ):
+                # The provider removed this file (for example Claude Code's own
+                # session cleanup). Its imported usage stays; do not retry it
+                # until the path exists again.
+                continue
             try:
                 if source.canonical_path is None or source.approved_root is None:
                     continue
@@ -97,6 +106,11 @@ class CollectionService:
                     continue
                 self.ingestion.rescan(source.source_id, record_unchanged=False)
                 self._seen_files[source.source_id] = identity
+            except FileNotFoundError:
+                # A removed source is not a failure: the provider deleted it.
+                self._seen_files.pop(source.source_id, None)
+                self.sources.session.rollback()
+                self.sources.set_state(source.source_id, SourceState.SOURCE_MISSING)
             except Exception:  # noqa: BLE001 - one bad source must not starve the others
                 self._seen_files.pop(source.source_id, None)
                 self.sources.session.rollback()
