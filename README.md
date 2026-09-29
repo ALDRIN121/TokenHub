@@ -116,6 +116,21 @@ to the provider database. Antigravity's local metadata format is private, so
 unrecognized or inconsistent generations are excluded and reported as partial
 instead of estimated. `ANTIGRAVITY_HOME` can point to another Antigravity root.
 
+## Where TokenHub looks
+
+Each agent keeps a fixed folder layout (`.claude`, `.codex`, `.hermes`,
+`.gemini/antigravity`, VS Code's `Code/User`), but the folder it sits under can
+differ, for example on Windows when a profile lives on another drive or is
+redirected. TokenHub checks, in order: the agent's environment override
+(`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME`, `ANTIGRAVITY_HOME`,
+`VSCODE_USER_DATA_DIR`), your home directory, `USERPROFILE`, `APPDATA` and
+`LOCALAPPDATA` (Windows) or `XDG_CONFIG_HOME` and `XDG_DATA_HOME` (Linux), and on
+Windows `<drive>:\Users\<you>` for each drive present. A location that already
+holds session data wins over an empty folder at home. Only your own locations are
+checked, nothing is crawled, and symlinked folders are never followed. Overrides
+accept `~/`, `~\` and environment variables such as `%USERPROFILE%`. Anything
+found this way still needs your approval before it is imported.
+
 ## Discovery and approval
 
 `GET /api/v1/discovery` reports each provider's display name, connection state,

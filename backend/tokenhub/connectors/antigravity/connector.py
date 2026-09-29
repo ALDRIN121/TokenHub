@@ -10,7 +10,7 @@ from tokenhub.connectors.protocol import (
     DiscoveryContext,
     SafeSourceView,
     ScanResult,
-    select_root,
+    find_root,
 )
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
@@ -32,7 +32,9 @@ class AntigravityConnector:
     provider = Provider.ANTIGRAVITY
 
     def detect(self, context: DiscoveryContext) -> DetectionResult:
-        root = select_root(context, "ANTIGRAVITY_HOME", ".gemini/antigravity", canonicalize=False)
+        root = find_root(
+            context, "ANTIGRAVITY_HOME", ".gemini/antigravity", marker="conversations", canonicalize=False
+        )
         evidence = []
         if root.is_dir() and not root.is_symlink():
             evidence.append("known_root_exists")
@@ -49,7 +51,9 @@ class AntigravityConnector:
         )
 
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
-        root = select_root(context, "ANTIGRAVITY_HOME", ".gemini/antigravity", canonicalize=False) / "conversations"
+        root = find_root(
+            context, "ANTIGRAVITY_HOME", ".gemini/antigravity", marker="conversations", canonicalize=False
+        ) / "conversations"
         if not root.is_dir() or root.is_symlink():
             return []
         sources = []

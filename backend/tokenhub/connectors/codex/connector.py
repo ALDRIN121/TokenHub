@@ -12,7 +12,7 @@ from tokenhub.connectors.protocol import (
     DiscoveryContext,
     SafeSourceView,
     ScanResult,
-    select_root,
+    find_root,
 )
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
@@ -38,7 +38,7 @@ class CodexConnector:
         evidence: list[str] = []
         if context.which("codex") is not None:
             evidence.append("executable_on_path")
-        root = select_root(context, "CODEX_HOME", ".codex", canonicalize=False)
+        root = find_root(context, "CODEX_HOME", ".codex", marker="sessions", canonicalize=False)
         if root.is_dir() and not root.is_symlink():
             evidence.append("known_root_exists")
         sources = self.discover_sources(context)
@@ -56,7 +56,7 @@ class CodexConnector:
         )
 
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
-        root = select_root(context, "CODEX_HOME", ".codex", canonicalize=False)
+        root = find_root(context, "CODEX_HOME", ".codex", marker="sessions", canonicalize=False)
         sessions = root / "sessions"
         # These checks cheaply classify stable missing/symlink roots. The
         # descriptor anchor below remains the authority if the path changes.

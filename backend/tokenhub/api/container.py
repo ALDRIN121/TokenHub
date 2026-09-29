@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from tokenhub.analytics.service import AnalyticsService
 from tokenhub.connectors.protocol import DiscoveryContext
 from tokenhub.connectors.registry import ConnectorRegistry
+from tokenhub.connectors.roots import candidate_roots
 from tokenhub.database.migrations import run_migrations
 from tokenhub.database.repositories import SourceRepository, UsageRepository
 from tokenhub.database.session import create_engine_for
@@ -71,10 +72,12 @@ class Container:
         """Discovery inputs, defaulting to the real home and process environment."""
         if self._discovery_context is not None:
             return self._discovery_context
+        home = self.settings.home_directory
         return DiscoveryContext(
-            home=self.settings.home_directory,
+            home=home,
             environment=os.environ,
             which=shutil.which,
+            search_roots=candidate_roots(os.environ, home),
         )
 
     @discovery_context.setter

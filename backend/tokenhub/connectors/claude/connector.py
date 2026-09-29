@@ -12,7 +12,7 @@ from tokenhub.connectors.protocol import (
     DiscoveryContext,
     SafeSourceView,
     ScanResult,
-    select_root,
+    find_root,
 )
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
@@ -38,7 +38,7 @@ class ClaudeConnector:
         evidence: list[str] = []
         if context.which("claude") is not None:
             evidence.append("executable_on_path")
-        root = select_root(context, "CLAUDE_CONFIG_DIR", ".claude", canonicalize=False)
+        root = find_root(context, "CLAUDE_CONFIG_DIR", ".claude", marker="projects", canonicalize=False)
         if root.is_dir() and not root.is_symlink():
             evidence.append("known_root_exists")
             settings = root / "settings.json"
@@ -59,7 +59,7 @@ class ClaudeConnector:
         )
 
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
-        root = select_root(context, "CLAUDE_CONFIG_DIR", ".claude", canonicalize=False)
+        root = find_root(context, "CLAUDE_CONFIG_DIR", ".claude", marker="projects", canonicalize=False)
         projects = root / "projects"
         if root.is_symlink() or not projects.is_dir() or projects.is_symlink():
             return []

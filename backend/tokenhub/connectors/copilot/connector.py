@@ -14,7 +14,7 @@ from tokenhub.connectors.protocol import (
     DiscoveryContext,
     SafeSourceView,
     ScanResult,
-    select_root,
+    find_root,
 )
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
@@ -38,12 +38,16 @@ _SESSION_FILE = re.compile(
 
 def _user_data_dir(context: DiscoveryContext) -> Path:
     if sys.platform == "darwin":
-        default = "Library/Application Support/Code"
+        names = ("Library/Application Support/Code",)
     elif os.name == "nt":
-        default = str(Path(context.environment.get("APPDATA", str(context.home / "AppData/Roaming"))) / "Code")
+        roaming = context.environment.get("APPDATA", str(context.home / "AppData/Roaming"))
+        names = (str(Path(roaming) / "Code"), "AppData/Roaming/Code")
     else:
-        default = str(Path(context.environment.get("XDG_CONFIG_HOME", str(context.home / ".config"))) / "Code")
-    return select_root(context, "VSCODE_USER_DATA_DIR", default, canonicalize=False)
+        config = context.environment.get("XDG_CONFIG_HOME", str(context.home / ".config"))
+        names = (str(Path(config) / "Code"), ".config/Code")
+    return find_root(
+        context, "VSCODE_USER_DATA_DIR", names, marker="User/workspaceStorage", canonicalize=False
+    )
 
 
 class CopilotConnector:

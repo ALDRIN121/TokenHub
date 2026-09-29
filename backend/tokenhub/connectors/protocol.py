@@ -1,6 +1,7 @@
 """Provider-neutral connector contracts and path-free discovery results."""
 
-from collections.abc import Callable, Mapping
+import os
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -23,6 +24,8 @@ class DiscoveryContext:
     home: Path
     environment: Mapping[str, str]
     which: Callable[[str], str | None]
+    # Extra bases (other drives, redirected profiles) searched after ``home``.
+    search_roots: tuple[Path, ...] = ()
 
 
 class SafeSourceView(BaseModel):
@@ -92,6 +95,60 @@ class UsageConnector(Protocol):
     def capabilities(self) -> ConnectorCapabilities: ...
 
 
+def _override_directory(
+    context: DiscoveryContext, override_key: str, canonicalize: bool
+) -> Path | None:
+    """The env override when it names an existing, non-symlink directory."""
+    override = context.environment.get(override_key)
+    if not override:
+        return None
+    if override == "~":
+        candidate = context.home
+    elif override.startswith(("~/", "~\\")):
+        candidate = context.home / override[2:]
+    else:
+        candidate = Path(os.path.expandvars(override))
+    if candidate.is_dir() and not candidate.is_symlink():
+        if canonicalize:
+            return candidate.resolve(strict=True)
+        if candidate.is_absolute():
+            return candidate
+    return None
+
+
+def find_root(
+    context: DiscoveryContext,
+    override_key: str,
+    default_names: str | Sequence[str],
+    *,
+    marker: str | None = None,
+    canonicalize: bool = True,
+) -> Path:
+    """Locate an agent's data root under an injected override, home or search roots.
+
+    The env override wins. Otherwise each ``default_names`` entry is tried
+    under ``home`` and then every search root, preferring a directory that
+    contains ``marker`` (so an empty stub at home does not hide real data on
+    another drive), then any existing directory. With no match the
+    ``home``-relative first name is returned, as before.
+    """
+    override = _override_directory(context, override_key, canonicalize)
+    if override is not None:
+        return override
+    names = (default_names,) if isinstance(default_names, str) else tuple(default_names)
+    candidates = [
+        base / name for base in (context.home, *context.search_roots) for name in names
+    ]
+    usable = [path for path in candidates if path.is_dir() and not path.is_symlink()]
+    if marker is not None:
+        for path in usable:
+            if (path / marker).exists():
+                return path
+    if usable:
+        return usable[0]
+    return context.home / names[0]
+
+
 def select_root(
     context: DiscoveryContext,
     override_key: str,
@@ -100,17 +157,5 @@ def select_root(
     canonicalize: bool = True,
 ) -> Path:
     """Use an existing injected override directory or the injected home root."""
-    override = context.environment.get(override_key)
-    if override:
-        if override == "~":
-            candidate = context.home
-        elif override.startswith("~/"):
-            candidate = context.home / override[2:]
-        else:
-            candidate = Path(override)
-        if candidate.is_dir() and not candidate.is_symlink():
-            if canonicalize:
-                return candidate.resolve(strict=True)
-            if candidate.is_absolute():
-                return candidate
-    return context.home / default_name
+    override = _override_directory(context, override_key, canonicalize)
+    return override if override is not None else context.home / default_name

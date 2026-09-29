@@ -10,7 +10,7 @@ from tokenhub.connectors.protocol import (
     DiscoveryContext,
     SafeSourceView,
     ScanResult,
-    select_root,
+    find_root,
 )
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
@@ -31,7 +31,7 @@ class HermesConnector:
         evidence: list[str] = []
         if context.which("hermes") is not None:
             evidence.append("executable_on_path")
-        root = select_root(context, "HERMES_HOME", ".hermes", canonicalize=False)
+        root = find_root(context, "HERMES_HOME", ".hermes", marker="state.db", canonicalize=False)
         if root.is_dir() and not root.is_symlink():
             evidence.append("known_root_exists")
         sources = self.discover_sources(context)
@@ -49,7 +49,7 @@ class HermesConnector:
         )
 
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
-        root = select_root(context, "HERMES_HOME", ".hermes", canonicalize=False)
+        root = find_root(context, "HERMES_HOME", ".hermes", marker="state.db", canonicalize=False)
         if not root.is_dir() or root.is_symlink():
             return []
         with anchor_directory(root) as anchored:
