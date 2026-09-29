@@ -205,7 +205,7 @@ def test_provider_collection_enable_requires_origin(providers):
 def test_replaced_provider_root_is_rejected_without_losing_imported_usage(
     providers, connector
 ):
-    client, claude, _ = providers
+    client, claude, database = providers
     source = source_id(client, connector)
     assert (
         client.post(f"/api/v1/sources/{source}/approve", headers=ORIGIN).status_code
@@ -217,6 +217,9 @@ def test_replaced_provider_root_is_rejected_without_losing_imported_usage(
         if connector == "claude-code-local"
         else claude.parents[3] / ".hermes"
     )
+    if connector == "hermes-local":
+        # Windows cannot rename a directory while this fixture holds its DB open.
+        database.close()
     root.rename(root.with_name(root.name + "-original"))
     root.mkdir()
     client.app.state.container.collect()
