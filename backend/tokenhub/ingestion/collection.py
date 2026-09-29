@@ -1,6 +1,7 @@
 """Periodic collection through the existing approval and incremental scan gates."""
 
 import os
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -45,7 +46,8 @@ class CollectionService:
         self.sources.enable_auto_import(candidate)
         self.run_once()
 
-    def run_once(self) -> None:
+    def run_once(self, should_stop: Callable[[], bool] = lambda: False) -> None:
+        """Scan once; ``should_stop`` is checked between sources so shutdown stays prompt."""
         failures: set[str] = set()
         roots = {root.connector_id: root for root in self.sources.auto_import_roots()}
         for result in self.discovery.discover():
@@ -53,6 +55,8 @@ class CollectionService:
             if root is None:
                 continue
             for view in result.sources:
+                if should_stop():
+                    return
                 if not view.scan_supported or view.state is not SourceState.DISCOVERED:
                     continue
                 candidate = self.discovery.candidate(view.source_id)
@@ -69,6 +73,8 @@ class CollectionService:
                     failures.add(view.source_id)
 
         for source in self.sources.approved_sources():
+            if should_stop():
+                return
             if not source.scan_supported:
                 continue
             if (

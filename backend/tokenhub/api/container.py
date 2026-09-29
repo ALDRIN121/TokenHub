@@ -117,7 +117,7 @@ class Container:
 
     def collect(self) -> None:
         with self.lock:
-            self.services.collection.run_once()
+            self.services.collection.run_once(self._collection_stop.is_set)
 
     def _collect_periodically(self) -> None:
         while not self._collection_stop.wait(self.settings.scan_interval_seconds):

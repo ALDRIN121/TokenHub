@@ -257,6 +257,22 @@ def test_removed_source_is_missing_not_failed_and_keeps_usage(
     assert client.get('/api/v1/dashboard').json()['workload_tokens'] == 125
 
 
+def test_shutdown_interrupts_a_scan_between_sources(client: TestClient, tmp_path: Path) -> None:
+    client.post('/api/v1/collection/codex/enable', headers=ORIGIN)
+    sessions = tmp_path / 'home/.codex/sessions'
+    for number in range(3):
+        (sessions / f'extra{number}.jsonl').write_bytes(token_record(1, input_tokens=1, output_tokens=1))
+    container = client.app.state.container
+    collection = container.services.collection
+    scanned: list[str] = []
+    original = container.services.ingestion.rescan
+    container.services.ingestion.rescan = lambda source_id, **kw: scanned.append(source_id) or original(source_id, **kw)
+    calls = iter([False] * 6 + [True] * 100)
+    collection.run_once(lambda: next(calls))
+    assert 0 < len(scanned) < 4
+    container.services.ingestion.rescan = original
+
+
 def test_retry_recovers_when_source_identity_is_unchanged(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
