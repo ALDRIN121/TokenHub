@@ -13,6 +13,7 @@ import tarfile
 import tempfile
 import urllib.request
 import venv
+from contextlib import closing
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -95,7 +96,7 @@ def smoke_install(path: Path) -> None:
             with opener.open(url + "api/v1/status", timeout=3) as response:
                 assert json.load(response) == {"status": "ok"}
             database = home / ".tokenhub" / "tokenhub.sqlite3"
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
             assert revision == ("0005_usage_metadata",), f"unexpected Alembic revision: {revision}"
             assert _run([str(tokenhub), "status"], env=env).strip() == url
