@@ -12,7 +12,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
     "fastapi",
-    "uvicorn[standard]",
+    "uvicorn",
     "pydantic",
     "sqlalchemy",
     "alembic",
