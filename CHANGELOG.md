@@ -22,5 +22,7 @@
   watchfiles, PyYAML, python-dotenv).
 
 ### Added
+- The data-quality panel explains that some sessions record only a combined total
+  with no input/output split, which TokenHub cannot count and never guesses.
 - `tokenhub --version`.
 - `data_version` in `GET /api/v1/collection`.

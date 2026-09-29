@@ -432,8 +432,9 @@ describe('TokenHub client', () => {
     expect(await screen.findByRole('heading', { name: 'Data quality' })).toBeInTheDocument();
     expect(screen.getByText('Codex session')).toBeInTheDocument();
     expect(screen.getByText('Hermes state database')).toBeInTheDocument();
-    expect(screen.getByText('Unsupported records: 2')).toBeInTheDocument();
+    expect(screen.getByText('Unsupported records: 2')).toHaveAttribute('title', expect.stringContaining('no input/output split'));
     expect(screen.getByText(/not fully readable \(partial, unsupported\)/)).toBeInTheDocument();
+    expect(screen.getByText(/only a combined total, with no input\/output split/)).toBeInTheDocument();
   });
 });
 

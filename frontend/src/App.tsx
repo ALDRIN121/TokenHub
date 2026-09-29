@@ -91,10 +91,15 @@ function explainQuality(freshness: SourceFreshness[]): string {
   const states = [...new Set(incomplete.map((entry) => entry.state))].join(', ');
   return (
     `Some sources are not fully readable (${states}). TokenHub reports only the records it could ` +
-    'read: a partial import means some usage records were unsupported or the newest record was still being written, and an unsupported ' +
-    'source means its records could not be read at all. Neither case is ever estimated or filled in.'
+    'read: a partial import means some usage records were unsupported (for example a session that records only a combined total, with no ' +
+    'input/output split) or the newest record was still being written, and an unsupported source means its records could not be read at all. ' +
+    'Neither case is ever estimated or filled in.'
   );
 }
+
+const UNSUPPORTED_RECORDS_HINT =
+  'TokenHub could not count these records, so their tokens are not in your totals. ' +
+  'For example, a session may record only a combined total with no input/output split; TokenHub never guesses one.';
 
 export default function App() {
   const [usage, setUsage] = useState<UsageBreakdown | null>(null);
@@ -326,7 +331,7 @@ export default function App() {
                       <span className="source-status__name"><Icon name="sources" />{displayNameForSource(discovery, entry.source_id)}</span>
                       <span className={`badge ${entry.state === 'healthy' ? 'badge--success' : INCOMPLETE_STATES.has(entry.state) ? 'badge--warning' : 'badge--neutral'}`}>{entry.state.replaceAll('_', ' ')}</span>
                       <span className="source-status__detail">Latest event: {formatTimestamp(entry.latest_event_at)}</span>
-                      {entry.unsupported_records != null ? <span className="source-status__detail">Unsupported records: {entry.unsupported_records}</span> : null}
+                      {entry.unsupported_records != null ? <span className="source-status__detail" title={UNSUPPORTED_RECORDS_HINT}>Unsupported records: {entry.unsupported_records}</span> : null}
                     </li>
                   ))}
                 </ul>
