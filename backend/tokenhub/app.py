@@ -25,6 +25,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 
 from tokenhub.api.container import Container
 from tokenhub.api.routes import router
+from tokenhub.runtime import RuntimeControl, runtime_router
 from tokenhub.security.http import is_loopback_host, is_same_origin
 from tokenhub.settings import TokenHubSettings
 
@@ -34,7 +35,10 @@ FRONTEND_DIST = Path(__file__).resolve().parent / "web"
 _READ_ONLY_METHODS = frozenset({"GET", "HEAD"})
 
 
-def create_app(settings: TokenHubSettings | None = None) -> FastAPI:
+def create_app(
+    settings: TokenHubSettings | None = None,
+    runtime_control: RuntimeControl | None = None,
+) -> FastAPI:
     """Build the app. No database, migration, or discovery work happens here."""
     container = Container(settings if settings is not None else TokenHubSettings())
 
@@ -66,6 +70,8 @@ def create_app(settings: TokenHubSettings | None = None) -> FastAPI:
         return await call_next(request)
 
     app.include_router(router)
+    if runtime_control is not None:
+        app.include_router(runtime_router(runtime_control))
     if FRONTEND_DIST.is_dir():
         app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
     return app
