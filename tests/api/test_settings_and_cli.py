@@ -139,3 +139,14 @@ def test_hidden_child_entrypoint_consumes_token(monkeypatch):
     assert cli.main(["_serve", "9000"]) == 0
     assert calls == [(9000, "a" * 64)]
     assert "TOKENHUB_INTERNAL_CONTROL_TOKEN" not in os.environ
+
+
+def test_cli_reports_the_installed_version(capsys) -> None:
+    from importlib import metadata
+
+    from tokenhub.cli import main
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["--version"])
+    assert stopped.value.code == 0
+    assert capsys.readouterr().out.strip() == f"tokenhub {metadata.version('tokenhub')}"

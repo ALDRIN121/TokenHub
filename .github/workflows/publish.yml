@@ -11,7 +11,6 @@ on:
       version:
         description: Version expected in pyproject.toml
         required: true
-        default: '0.1.1'
         type: string
       wheel_sha256:
         description: Reviewed TestPyPI wheel SHA-256 (required for PyPI)

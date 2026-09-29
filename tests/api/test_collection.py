@@ -316,7 +316,7 @@ def test_rediscovering_unchanged_sources_writes_nothing(client: TestClient) -> N
     writes: list[str] = []
 
     @event.listens_for(container._engine, 'before_cursor_execute')
-    def record(conn, cursor, statement, *args):  # noqa: ANN001
+    def record(conn, cursor, statement, *args):
         if statement.lstrip().upper().startswith(('INSERT', 'UPDATE', 'DELETE')):
             writes.append(statement)
 

@@ -7,6 +7,7 @@ import os
 import sys
 import webbrowser
 from collections.abc import Sequence
+from importlib import metadata
 
 from tokenhub.runtime.manager import RuntimeManager
 from tokenhub.server import run_server
@@ -17,6 +18,14 @@ def loopback_url(settings: TokenHubSettings) -> str:
     """The only URL this server is reachable at."""
     host = "[::1]" if settings.host == "::1" else settings.host
     return f"http://{host}:{settings.port}/"
+
+
+def installed_version() -> str:
+    """The installed distribution's version: pyproject.toml is the only place it is set."""
+    try:
+        return metadata.version("tokenhub")
+    except metadata.PackageNotFoundError:
+        return "unknown"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -30,6 +39,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     parser = argparse.ArgumentParser(prog="tokenhub")
+    parser.add_argument("--version", action="version", version=f"tokenhub {installed_version()}")
     parser.add_argument(
         "command", nargs="?", choices=("start", "status", "open", "stop"), default="start"
     )

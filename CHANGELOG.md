@@ -1,0 +1,26 @@
+# Changelog
+
+## Unreleased (0.1.2)
+
+### Fixed
+- Session files that a provider deleted (for example Claude Code's own cleanup)
+  are now reported as `source_missing` instead of `error`. They no longer count
+  as failed sources or get retried every scan, and their imported usage is kept.
+- Codex `token_count` snapshots that repeat per-response usage no longer mark
+  every session `partial`. A session with snapshots but no per-response usage is
+  still reported as unsupported. Codex parser version is now `codex-jsonl-v5`.
+
+### Changed
+- The dashboard polls `data_version` and reloads only when it changed, and
+  `GET /api/v1/discovery` is served from the last discovery pass until then.
+  Each provider folder is walked once per pass and unchanged sources are not
+  rewritten to the database.
+- Unchanged sources are skipped after a restart, and unchanged Hermes and
+  Antigravity databases are no longer copied every scan.
+- `tokenhub stop` no longer waits for a whole scan to finish.
+- Dropped the unused `uvicorn[standard]` extras (uvloop, httptools, websockets,
+  watchfiles, PyYAML, python-dotenv).
+
+### Added
+- `tokenhub --version`.
+- `data_version` in `GET /api/v1/collection`.

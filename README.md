@@ -21,6 +21,7 @@ tokenhub                     # starts in the background and opens the local dash
 tokenhub status              # prints its local URL
 tokenhub open                # opens an already running dashboard
 tokenhub stop                # stops this TokenHub instance
+tokenhub --version           # prints the installed version
 ```
 
 `tokenhub start --no-open` starts without opening a browser. Use
@@ -57,7 +58,8 @@ The packaged UI is mounted at `/`; the API also works if the built UI is absent.
 ## Automatic collection
 
 While TokenHub is running, it scans approved sources from all five providers at startup and every
-30 seconds. The explorer refreshes itself every 10 seconds. **Refresh data** scans
+30 seconds. Every 10 seconds the explorer checks a small change counter
+(`data_version` in `GET /api/v1/collection`) and reloads only when it moved. **Refresh data** scans
 approved sources immediately and shows the last scan time. Approving a provider
 in the UI also starts its first import immediately. Unchanged session files are
 skipped. Hermes and Antigravity databases are checked on each scan
