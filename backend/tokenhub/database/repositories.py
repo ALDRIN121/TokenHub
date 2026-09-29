@@ -168,7 +168,7 @@ class SourceRepository:
         metadata only, while the snapshot parsers reconcile their source rows.
         """
         upgrades = [
-            ("codex-local", "codex", "jsonl", ["codex-jsonl-v1", "codex-jsonl-v2", "codex-jsonl-v3"], PARSER_VERSION),
+            ("codex-local", "codex", "jsonl", ["codex-jsonl-v1", "codex-jsonl-v2", "codex-jsonl-v3", "codex-jsonl-v4"], PARSER_VERSION),
             ("claude-code-local", "claude_code", "jsonl", ["claude-jsonl-v1"], CLAUDE_PARSER_VERSION),
             ("hermes-local", "hermes", "sqlite", ["hermes-sqlite-v1"], HERMES_PARSER_VERSION),
         ]

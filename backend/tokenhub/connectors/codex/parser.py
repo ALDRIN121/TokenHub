@@ -35,10 +35,13 @@ class _ModelContext:
     session_id: str | None = None
     current_model: str | None = None
     turns: dict[str, str | None] = field(default_factory=dict)
+    saw_usage_record: bool = False
 
     def observe(self, record: Any) -> None:
         if not isinstance(record, dict) or not isinstance(record.get("payload"), dict):
             return
+        if record.get("type") == "token_usage_record":
+            self.saw_usage_record = True
         payload = record["payload"]
         if record.get("type") == "session_meta":
             self.session_id = usage_identifier(payload.get("id") or payload.get("session_id"))
@@ -83,6 +86,7 @@ def parse_codex_jsonl(
     context = _ModelContext()
     safe_byte_offset = start_offset
     unsupported_records = 0
+    snapshot_records = 0
     partial_final_record = False
     full_reparse = start_offset == 0
 
@@ -130,11 +134,20 @@ def parse_codex_jsonl(
             context.observe(record)
             if _is_non_usage_record(record):
                 continue
+            if _is_usage_snapshot(record):
+                snapshot_records += 1
+                continue
             event = _parse_usage_record(record, source, context)
             if event is None:
                 unsupported_records += 1
             else:
                 events.append(event)
+
+    if snapshot_records and not (events or context.saw_usage_record):
+        # Snapshots normally repeat what per-response records already carry. A
+        # session with snapshots but no per-response usage would otherwise look
+        # healthy while contributing nothing, so keep that case visible.
+        unsupported_records += snapshot_records
 
     return ParsedCodexScan(
         events=events,
@@ -213,6 +226,17 @@ def _is_non_usage_record(record: Any) -> bool:
         and isinstance(payload, dict)
         and isinstance(payload.get("type"), str)
         and payload["type"] in _NON_USAGE_EVENT_TYPES
+    )
+
+
+def _is_usage_snapshot(record: Any) -> bool:
+    """A cumulative ``token_count`` event; never added to per-response totals."""
+    payload = record.get("payload") if isinstance(record, dict) else None
+    return (
+        isinstance(record, dict)
+        and record.get("type") == "event_msg"
+        and isinstance(payload, dict)
+        and payload.get("type") == "token_count"
     )
 
 

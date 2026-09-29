@@ -37,8 +37,6 @@ def test_non_usage_session_records_are_ignored_without_marking_usage_partial(tmp
 
 
 @pytest.mark.parametrize("payload", [
-    {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 9999}}},
-    {"type": "token_count", "info": None},
     {"type": "unknown_usage", "usage": {"input_tokens": 9999}},
     None,
 ])
@@ -55,6 +53,31 @@ def test_usage_bearing_event_messages_remain_visible_as_unsupported(
     assert len(result.events) == 1
     assert result.events[0].workload_tokens == 125
     assert result.unsupported_records == 1
+
+
+@pytest.mark.parametrize("info", [{"total_token_usage": {"input_tokens": 9999}}, None])
+def test_snapshots_beside_per_response_usage_are_skipped_not_unsupported(
+    tmp_path: Path, info: object
+) -> None:
+    path = tmp_path / "session.jsonl"
+    path.write_bytes(
+        (FIXTURES / "normal.jsonl").read_bytes()
+        + json.dumps({"type": "event_msg", "payload": {"type": "token_count", "info": info}}).encode() + b"\n"
+    )
+    source = replace(synthetic_source("normal.jsonl"), canonical_path=path, approved_root=tmp_path)
+    result = parse_codex_jsonl(source, 0)
+    assert [event.workload_tokens for event in result.events] == [125]
+    assert result.unsupported_records == 0
+
+
+def test_snapshots_without_per_response_usage_remain_unsupported(tmp_path: Path) -> None:
+    path = tmp_path / "session.jsonl"
+    snapshot = {"type": "event_msg", "payload": {"type": "token_count", "info": None}}
+    path.write_bytes((json.dumps(snapshot) + "\n").encode() * 2)
+    source = replace(synthetic_source("normal.jsonl"), canonical_path=path, approved_root=tmp_path)
+    result = parse_codex_jsonl(source, 0)
+    assert result.events == []
+    assert result.unsupported_records == 2
 
 
 def test_token_values_outside_storage_range_are_unsupported(tmp_path: Path) -> None:
@@ -186,7 +209,7 @@ def test_parser_leaves_missing_breakdowns_unknown() -> None:
     assert event.cache_write_tokens is None
     assert event.reasoning_tokens is None
     assert event.quality is Quality.EXACT
-    assert event.parser_version == "codex-jsonl-v4"
+    assert event.parser_version == "codex-jsonl-v5"
 
 
 def test_parser_starts_at_the_provided_completed_line_offset() -> None:

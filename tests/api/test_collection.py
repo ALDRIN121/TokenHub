@@ -298,8 +298,8 @@ def test_stored_parser_upgrade_does_not_need_rediscovery(client: TestClient, tmp
         freshness = second.get('/api/v1/data-quality').json()['source_freshness'][0]
         assert freshness['state'] == 'healthy'
         services = restarted.state.container.services
-        assert services.source_repository.get(source_id).parser_version == 'codex-jsonl-v4'
-        assert services.usage_repository.current_cursor(source_id).parser_version == 'codex-jsonl-v4'
+        assert services.source_repository.get(source_id).parser_version == 'codex-jsonl-v5'
+        assert services.usage_repository.current_cursor(source_id).parser_version == 'codex-jsonl-v5'
         assert freshness['unsupported_records'] == 0
 
 

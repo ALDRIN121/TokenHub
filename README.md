@@ -81,9 +81,11 @@ from updating, and collection runs even when the dashboard is closed.
 
 For Codex, only per-response `token_usage_record.payload.usage` values contribute
 to totals.
-Known session messages are skipped. Cumulative token snapshots, malformed records,
-and unknown usage structures remain visible as unsupported records; cumulative
-snapshots are excluded from totals to avoid double counting. Workload is
+Known session messages are skipped. Cumulative `token_count` snapshots are never
+added to totals, to avoid double counting; when a session also has per-response
+usage they are skipped as redundant. A session with snapshots but no per-response
+usage, malformed records, and unknown usage structures remain visible as
+unsupported records. Workload is
 input plus output, with cached input and reasoning already included in those
 counts. Token counts are not billing amounts. The UI uses K/M/B abbreviations
 and shows the exact count on hover.
