@@ -30,6 +30,10 @@ class AnalyticsService:
     def dashboard(self) -> DashboardSummary:
         return self.usage_repository.dashboard_totals()
 
+    def usage_trends(self, **options: Any) -> dict[str, Any]:
+        from tokenhub.analytics.trends import usage_trends
+        return usage_trends(self, **options)
+
     def _events(self, start: datetime | None, end: datetime | None) -> Any:
         events, delta = self.usage_repository._canonical_deltas()
         query = select(events).where(delta)

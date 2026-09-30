@@ -6,6 +6,7 @@ from sqlite3 import Connection
 
 from sqlalchemy import Engine, create_engine, event
 
+from tokenhub.analytics.calendar import sqlite_bucket
 from tokenhub.database.models import Base
 from tokenhub.settings import TokenHubSettings
 
@@ -33,6 +34,7 @@ def create_engine_for(settings: TokenHubSettings) -> Engine:
     @event.listens_for(engine, "connect")
     def configure_sqlite_connection(dbapi_connection: Connection, _: object) -> None:
         dbapi_connection.create_collation("TOKENHUB_NATURAL", _natural_order)
+        dbapi_connection.create_function("tokenhub_trend_bucket", 4, sqlite_bucket, deterministic=True)
         dbapi_connection.create_function(
             "tokenhub_session_key", 3,
             lambda connector, session, source: hashlib.sha256(

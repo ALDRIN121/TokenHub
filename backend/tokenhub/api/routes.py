@@ -300,6 +300,34 @@ def usage(
     return build()  # Preserve the legacy full response for existing clients.
 
 
+@router.get("/usage/trends")
+def usage_trends(
+    request: Request,
+    start: Annotated[datetime | None, Query(alias="from")] = None,
+    end: Annotated[datetime | None, Query(alias="to")] = None,
+    time_zone: Annotated[str, Query(max_length=100)] = "UTC",
+    granularity: Literal["day", "week"] = "day",
+    provider: Literal["codex", "claude_code", "hermes", "vscode_copilot", "antigravity"] | None = None,
+    model: Annotated[str | None, Query(max_length=200)] = None,
+    unknown_model: bool = False,
+    dimension: Literal["providers", "models"] = "providers",
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> dict[str, Any]:
+    _date_bounds(start, end)
+    container = container_for(request)
+    def build() -> dict[str, Any]:
+        with container.read_services() as services:
+            try:
+                return services.analytics.usage_trends(start=start, end=end, time_zone=time_zone,
+                    granularity=granularity, provider=provider, model=model, unknown_model=unknown_model,
+                    dimension=dimension, offset=offset, limit=limit)
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+    return container.cached_view(("trends", start, end, time_zone, granularity, provider,
+                                  model, unknown_model, dimension, offset, limit), build)
+
+
 @router.get("/usage/models")
 @router.get("/usage/sessions")
 @router.get("/usage/sessions/{session_key}/models")

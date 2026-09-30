@@ -18,6 +18,7 @@ dependencies = [
     "alembic",
     "filelock>=3.12,<4",
     "psutil>=5.9,<8",
+    "tzdata>=2026.4",
 ]
 
 [project.scripts]
