@@ -177,3 +177,45 @@ def test_alembic_rejects_an_arbitrary_database_url(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "TOKENHUB_DATABASE_URL is not supported" in result.stderr
     assert not foreign_database.exists()
+
+
+def test_large_scan_batches_database_calls_and_preserves_duplicates(session: Session) -> None:
+    """A thousand observations should not require a thousand SQL round trips."""
+    from dataclasses import replace
+
+    from sqlalchemy import event
+
+    statements: list[str] = []
+    engine = session.get_bind()
+    def observe(connection, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+    event.listen(engine, "before_cursor_execute", observe)
+    try:
+        repo = UsageRepository(session)
+        rows = [synthetic_event(str(index)) for index in range(1000)]
+        outcome = repo.persist_scan(rows, cursor_for(1000))
+        assert outcome.inserted_events == 1000
+        assert len(statements) < 20
+        statements.clear()
+        revised = [replace(row, model_name="recorded-model", input_total_tokens=999) for row in rows]
+        repeated = repo.persist_scan(revised + [revised[0]], cursor_for(1000))
+        assert repeated.inserted_events == 0
+        assert repeated.duplicate_events == 1001
+        assert len(statements) < 20
+        assert repo.dashboard_totals().workload_tokens == 125000
+        assert repo.observed_events()[0].model_name == "recorded-model"
+    finally:
+        event.remove(engine, "before_cursor_execute", observe)
+
+
+def test_interruption_between_batches_rolls_back_events_and_cursor(session):
+    from tokenhub.ingestion.progress import ScanInterrupted, reporting
+    repo = UsageRepository(session)
+    repo.persist_scan([synthetic_event('original')], cursor_for(12))
+    def stop(**values):
+        if values.get('records_saved') == 500:
+            raise ScanInterrupted('synthetic stop')
+    with reporting(stop), pytest.raises(ScanInterrupted):
+        repo.persist_scan([synthetic_event(str(index)) for index in range(1000)], cursor_for(1000))
+    assert repo.current_cursor('source-a') == cursor_for(12)
+    assert repo.dashboard_totals().workload_tokens == 125

@@ -2,7 +2,7 @@
 
 import os
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -219,6 +219,7 @@ class ImportOutcome:
     cursor: SyncCursor
     partial_final_record: bool = False
     unsupported_records: int = 0
+    visible_change: bool = field(default=False, compare=False, repr=False)
 
 
 # These states retain explicit approval through successful scans and retryable failures.

@@ -13,6 +13,7 @@ from tokenhub.connectors.protocol import (
     UsageConnector,
 )
 from tokenhub.domain.models import Provider, SourceState
+from tokenhub.ingestion.progress import ScanInterrupted, report
 
 
 class ConnectorRegistry:
@@ -26,8 +27,11 @@ class ConnectorRegistry:
     def discover_all(self, context: DiscoveryContext) -> list[DetectionResult]:
         results: list[DetectionResult] = []
         for connector in self.connectors:
+            report()
             try:
                 results.append(connector.detect(context))
+            except ScanInterrupted:
+                raise
             except Exception:  # noqa: BLE001 - isolate arbitrary connector failures
                 provider = getattr(connector, "provider", None)
                 results.append(

@@ -12,6 +12,7 @@ from tokenhub.domain.models import (
     SourceDescriptor,
     SourceState,
 )
+from tokenhub.ingestion.progress import report
 
 
 class SourceNotFoundError(LookupError):
@@ -43,7 +44,7 @@ class IngestionService:
         # The repository validates containment and writes paths in its approval transaction.
         return self.source_repository.approve(source_id)
 
-    def rescan(self, source_id: str, *, record_unchanged: bool = True) -> ImportOutcome:
+    def rescan(self, source_id: str, *, record_unchanged: bool = True, rebuild: bool = False) -> ImportOutcome:
         source = self._source(source_id)
         connector = self._supported_connector(source)
         if (
@@ -52,7 +53,7 @@ class IngestionService:
             or source.approved_root is None
         ):
             raise SourceNotApprovedError("source must be approved before scanning")
-        cursor = self.usage_repository.current_cursor(source_id)
+        cursor = None if rebuild else self.usage_repository.current_cursor(source_id)
         try:
             # Pass database strings directly: SourceDescriptor checks their original spelling.
             descriptor = SourceDescriptor(
@@ -70,6 +71,8 @@ class IngestionService:
                 approved_root_device=source.approved_root_device,
                 approved_root_inode=source.approved_root_inode,
             )
+            report("reading", provider=source.provider, bytes_read=0, bytes_total=None,
+                   records_saved=0, records_total=None)
             result = connector.scan(descriptor, cursor)
         except (OSError, ValueError):
             self.source_repository.set_state(source_id, SourceState.ERROR)
@@ -79,33 +82,40 @@ class IngestionService:
             SourceState.PARTIAL,
         }:
             raise UnsupportedSourceError("connector did not return a supported scan")
-        return self.usage_repository.persist_scan(
+        outcome = self.usage_repository.persist_scan(
             list(result.events),
             result.cursor,
             state=result.state,
             partial_final_record=result.partial_final_record,
             unsupported_records=result.unsupported_records,
-            replace_events=result.replace_events,
+            replace_events=rebuild or result.replace_events,
             record_import=(
                 record_unchanged or result.cursor != cursor
                 or result.state.value != source.state
             ),
         )
 
+        report(inserted_delta=outcome.inserted_events, duplicate_delta=outcome.duplicate_events,
+               unsupported_delta=outcome.unsupported_records)
+        return outcome
+
     def rebuild(self) -> RebuildOutcome:
         sources = self.source_repository.approved_sources()
-        self.usage_repository.clear_normalized()
+        self.usage_repository.remove_disabled_usage()
         imports: list[ImportOutcome] = []
         failures: list[str] = []
-        for source in sources:
+        report("discovering", files_total=len(sources), files_completed=0)
+        for index, source in enumerate(sources):
+            report("reading", files_completed=index, provider=source.provider)
             try:
                 self._supported_connector(source)
             except UnsupportedSourceError:
                 continue
             try:
-                imports.append(self.rescan(source.source_id))
+                imports.append(self.rescan(source.source_id, rebuild=True))
             except (OSError, ValueError, SourceNotFoundError):
                 failures.append(source.source_id)
+        report(files_completed=len(sources))
         return RebuildOutcome(imports=tuple(imports), failed_source_ids=tuple(failures))
 
     def _source(self, source_id: str) -> SourceRecord:

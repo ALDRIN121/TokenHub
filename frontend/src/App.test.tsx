@@ -470,3 +470,55 @@ it('shows summary and source health beside the explorer without duplicate naviga
   expect(screen.queryByRole('link', { name: 'Overview' })).not.toBeInTheDocument();
   expect(screen.queryByRole('link', { name: 'Data quality' })).not.toBeInTheDocument();
 });
+
+it('reconnects to an active import on reload and polls every second', async () => {
+  const timers = vi.spyOn(window, 'setInterval');
+  const job = { job_id: 'recovering', kind: 'enable', state: 'running', stage: 'saving', provider: 'codex', files_total: 8, files_completed: 3, bytes_read: 100, bytes_total: 100, records_saved: 50, records_total: 100, records_read: 100, skipped_files: 0, inserted_events: 100, duplicate_events: 0, unsupported_records: 0, elapsed_seconds: 31, error: null, result: null };
+  let current = job;
+  server.use(http.get('/api/v1/collection', () => HttpResponse.json({ scan_interval_seconds: 30, codex_auto_import: true, data_version: 1, last_scan_at: null, failed_source_count: 0, active_job: current.state === 'running' ? current : null, latest_job: current })));
+  const view = render(<App />);
+  try {
+    await screen.findByText('Saving Codex usage');
+    await screen.findByRole('table', { name: 'Model usage' });
+    expect(screen.getByRole('progressbar', { name: 'Saving current file' })).toHaveAttribute('value', '50');
+    expect(screen.getByRole('searchbox')).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Refresh data' })).toBeDisabled();
+    const tick = timers.mock.calls.find(([, delay]) => delay === 1_000)!;
+    expect(tick).toBeDefined();
+    current = { ...job, state: 'completed', files_completed: 8 };
+    await act(async () => { await (tick[0] as () => Promise<void>)(); });
+    expect(screen.getByText('Import complete')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Refresh data' })).toBeEnabled();
+  } finally { view.unmount(); timers.mockRestore(); }
+});
+
+it('suspends polling in a hidden tab and checks again when visible', async () => {
+  const timers = vi.spyOn(window, 'setInterval');
+  const fetches = vi.spyOn(globalThis, 'fetch');
+  const visibility = vi.spyOn(document, 'visibilityState', 'get');
+  const view = render(<App />);
+  try {
+    await screen.findByRole('table', { name: 'Model usage' });
+    const tick = timers.mock.calls.find(([, delay]) => delay === 10_000)!;
+    const before = fetches.mock.calls.length;
+    visibility.mockReturnValue('hidden');
+    await act(async () => { await (tick[0] as () => Promise<void>)(); });
+    expect(fetches.mock.calls.length).toBe(before);
+    visibility.mockReturnValue('visible');
+    fireEvent(document, new Event('visibilitychange'));
+    await waitFor(() => expect(fetches.mock.calls.length).toBe(before + 1));
+  } finally { view.unmount(); timers.mockRestore(); fetches.mockRestore(); visibility.mockRestore(); }
+});
+
+it('does not reload provider discovery or quality for date-only changes', async () => {
+  const fetches = vi.spyOn(globalThis, 'fetch');
+  const view = render(<App />);
+  try {
+    await screen.findByRole('table', { name: 'Model usage' });
+    const before = fetches.mock.calls.length;
+    await userEvent.setup().selectOptions(screen.getByRole('combobox', { name: 'Date range' }), 'today');
+    await waitFor(() => expect(fetches.mock.calls.length).toBeGreaterThan(before));
+    const paths = fetches.mock.calls.slice(before).map(([input]) => String(input instanceof Request ? input.url : input));
+    expect(paths.every((path) => path.includes('/usage?'))).toBe(true);
+  } finally { view.unmount(); fetches.mockRestore(); }
+});

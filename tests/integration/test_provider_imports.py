@@ -70,6 +70,7 @@ def providers(tmp_path: Path):
     )
     app.state.container.discovery_context = DiscoveryContext(home, {}, lambda _: None)
     with TestClient(app, base_url="http://127.0.0.1:7432") as client:
+        app.state.container.collect()
         yield client, claude, database
     database.close()
 
@@ -158,6 +159,7 @@ def test_existing_hermes_detection_is_upgraded_to_importable(providers):
     services.source_repository.set_state(source, SourceState.UNSUPPORTED)
     # An out-of-band database edit: signal it as the collector or a route would.
     services.collection.bump()
+    client.app.state.container.collect()
     source = source_id(client, "hermes-local")
     assert (
         client.post(f"/api/v1/sources/{source}/approve", headers=ORIGIN).status_code
@@ -184,6 +186,7 @@ def test_provider_folder_consent_and_restart(providers, provider, connector):
         client.app.state.container.discovery_context
     )
     with TestClient(restarted, base_url="http://127.0.0.1:7432") as second:
+        restarted.state.container.collect()
         assert (
             connector
             in second.get("/api/v1/collection").json()["auto_import_connectors"]
@@ -432,6 +435,7 @@ def test_restart_skips_unchanged_jsonl_sources_but_reads_appended_ones(
     restarted = create_app(container.settings)
     restarted.state.container.discovery_context = DiscoveryContext(home, {}, lambda _: None)
     with TestClient(restarted, base_url="http://127.0.0.1:7432"):
+        restarted.state.container.collect()
         assert session not in scanned
         with claude.open("ab") as stream:
             stream.write(claude_record("message-two"))

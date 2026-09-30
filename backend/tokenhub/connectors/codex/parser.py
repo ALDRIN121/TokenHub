@@ -15,6 +15,7 @@ from tokenhub.domain.models import (
     SourceDescriptor,
     UsageEvent,
 )
+from tokenhub.ingestion.progress import progress_stream
 from tokenhub.security.paths import open_source_path
 
 _MISSING = object()
@@ -90,7 +91,7 @@ def parse_codex_jsonl(
     partial_final_record = False
     full_reparse = start_offset == 0
 
-    with os.fdopen(_open_approved_source(source), "rb") as session_file:
+    with progress_stream(os.fdopen(_open_approved_source(source), "rb")) as session_file:
         source_stat = os.fstat(session_file.fileno())
         prefix_hasher = hashlib.sha256()
         if start_offset > source_stat.st_size:

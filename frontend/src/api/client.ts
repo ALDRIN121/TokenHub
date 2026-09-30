@@ -1,4 +1,9 @@
 import type {
+  AcceptedJob,
+  CollectionJob,
+  ModelUsage,
+  SessionUsage,
+  UsagePage,
   ApprovalResult,
   CollectionStatus,
   DashboardSummary,
@@ -40,27 +45,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function getDiscovery(): Promise<DiscoveryResponse> {
-  return request<DiscoveryResponse>('/discovery');
+  return request<DiscoveryResponse>('/discovery?include_sources=false');
 }
 
 export function getDashboard(): Promise<DashboardSummary> {
   return request<DashboardSummary>('/dashboard');
 }
 
-export function getDataQuality(): Promise<DataQualityResponse> {
-  return request<DataQualityResponse>('/data-quality');
+export function getDataQuality(offset = 0): Promise<DataQualityResponse> {
+  return request<DataQualityResponse>(`/data-quality?lightweight=true&limit=25&offset=${offset}`);
 }
 
 export function getCollectionStatus(): Promise<CollectionStatus> {
   return request<CollectionStatus>('/collection');
 }
 
-export function refreshCollection(): Promise<CollectionStatus> {
-  return request<CollectionStatus>('/collection/refresh', { method: 'POST' });
+export function refreshCollection(): Promise<AcceptedJob | CollectionStatus> {
+  return request<AcceptedJob | CollectionStatus>('/collection/refresh?background=true', { method: 'POST' });
 }
 
-export function setProviderAutoImport(provider: string, enabled: boolean): Promise<CollectionStatus> {
-  return request<CollectionStatus>(`/collection/${encodeURIComponent(provider)}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' });
+export function setProviderAutoImport(provider: string, enabled: boolean): Promise<AcceptedJob | CollectionStatus> {
+  return request<AcceptedJob | CollectionStatus>(`/collection/${encodeURIComponent(provider)}/${enabled ? 'enable?background=true' : 'disable'}`, { method: 'POST' });
 }
 
 export function approveSource(sourceId: string): Promise<ApprovalResult> {
@@ -75,11 +80,23 @@ export function rescanSource(sourceId: string): Promise<ImportOutcome> {
   });
 }
 
-export function rebuildIndex(): Promise<RebuildOutcome> {
-  return request<RebuildOutcome>('/rebuild', { method: 'POST' });
+export function rebuildIndex(): Promise<AcceptedJob | RebuildOutcome> {
+  return request<AcceptedJob | RebuildOutcome>('/rebuild?background=true', { method: 'POST' });
 }
 
 export function getUsageBreakdown(range?: { from: string; to: string }): Promise<UsageBreakdown> {
-  const query = range ? `?${new URLSearchParams(range).toString()}` : '';
+  const query = `?${new URLSearchParams({ ...range, summary_only: 'true' }).toString()}`;
   return request<UsageBreakdown>(`/usage${query}`);
+}
+
+export function getCollectionJob(id: string): Promise<CollectionJob> {
+  return request<CollectionJob>(`/jobs/${encodeURIComponent(id)}`);
+}
+
+export function getUsagePage(mode: 'models' | 'sessions', options: Record<string, string>, signal?: AbortSignal): Promise<UsagePage<ModelUsage | SessionUsage>> {
+  return request(`/usage/${mode}?${new URLSearchParams({ ...options, limit: '25' })}`, { signal });
+}
+
+export function getSessionModels(key: string, options: Record<string, string>, signal?: AbortSignal): Promise<UsagePage<ModelUsage>> {
+  return request(`/usage/sessions/${encodeURIComponent(key)}/models?${new URLSearchParams({ ...options, limit: '25' })}`, { signal });
 }

@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import case, delete, func, or_, select, update
+from sqlalchemy import Table, case, delete, func, select, true, union_all, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, aliased
@@ -31,6 +31,7 @@ from tokenhub.domain.models import (
     SyncCursor,
     UsageEvent,
 )
+from tokenhub.ingestion.progress import report
 from tokenhub.security.paths import validate_source_path
 
 
@@ -281,54 +282,59 @@ class UsageRepository:
         if any(event.source_id != cursor.source_id for event in events):
             raise ValueError("scan events and cursor must belong to the same source")
         inserted_events = 0
+        visible_change = False
+        report("saving", records_saved=0, records_total=len(events))
         with self.session.begin():
             if replace_events:
-                self.session.execute(
+                removed = self.session.execute(
                     delete(UsageEventRecord).where(
                         UsageEventRecord.source_id == cursor.source_id
                     )
                 )
-            for usage_event in events:
-                result = self.session.execute(
-                    insert(UsageEventRecord)
-                    .values(
-                        connector_id=usage_event.connector_id,
-                        provider=usage_event.provider.value,
-                        source_id=usage_event.source_id,
-                        record_identity=usage_event.record_identity,
-                        timestamp=usage_event.timestamp,
-                        input_total_tokens=usage_event.input_total_tokens,
-                        output_total_tokens=usage_event.output_total_tokens,
-                        cache_read_tokens=usage_event.cache_read_tokens,
-                        cache_write_tokens=usage_event.cache_write_tokens,
-                        reasoning_tokens=usage_event.reasoning_tokens,
-                        measurement_type=usage_event.measurement_type.value,
-                        quality=usage_event.quality.value,
-                        parser_version=usage_event.parser_version,
-                        model_name=usage_event.model_name,
-                        session_id=usage_event.session_id,
-                        model_attribution=usage_event.model_attribution,
-                    )
-                    .on_conflict_do_nothing(
-                        index_elements=["source_id", "record_identity"]
-                    )
+                visible_change = cast(CursorResult[Any], removed).rowcount > 0
+            table = cast(Table, UsageEventRecord.__table__)
+            statement = insert(table)
+            statement = statement.on_conflict_do_update(
+                index_elements=["source_id", "record_identity"],
+                # Reparsed Codex records enrich metadata but never revise
+                # previously observed token counters.
+                set_={name: getattr(statement.excluded, name) for name in (
+                    "model_name", "session_id", "model_attribution", "parser_version",
+                )},
+            )
+            seen: set[str] = set()
+            for start in range(0, len(events), 500):
+                report("saving", records_saved=start)
+                chunk = events[start:start + 500]
+                identities = {row.record_identity for row in chunk}
+                existing = {identity: (model, session_id, attribution) for identity, model, session_id, attribution in self.session.execute(select(UsageEventRecord.record_identity, UsageEventRecord.model_name, UsageEventRecord.session_id, UsageEventRecord.model_attribution).where(
+                    UsageEventRecord.source_id == cursor.source_id,
+                    UsageEventRecord.record_identity.in_(identities),
+                ))}
+                visible_change = visible_change or any(
+                    row.record_identity in existing and existing[row.record_identity] != (row.model_name, row.session_id, row.model_attribution)
+                    for row in chunk
                 )
-                inserted = cast(CursorResult[Any], result).rowcount
-                inserted_events += inserted
-                if not inserted:
-                    # Reparse enriches historical rows without revising their
-                    # token counts or reporting a duplicate as a new event.
-                    self.session.execute(
-                        update(UsageEventRecord).where(
-                            UsageEventRecord.source_id == usage_event.source_id,
-                            UsageEventRecord.record_identity == usage_event.record_identity,
-                        ).values(
-                            model_name=usage_event.model_name,
-                            session_id=usage_event.session_id,
-                            model_attribution=usage_event.model_attribution,
-                            parser_version=usage_event.parser_version,
-                        )
-                    )
+                inserted_events += len(identities - existing.keys() - seen)
+                seen.update(identities)
+                self.session.connection().execute(statement, [{
+                    "connector_id": row.connector_id,
+                    "provider": row.provider.value,
+                    "source_id": row.source_id,
+                    "record_identity": row.record_identity,
+                    "timestamp": row.timestamp,
+                    "input_total_tokens": row.input_total_tokens,
+                    "output_total_tokens": row.output_total_tokens,
+                    "cache_read_tokens": row.cache_read_tokens,
+                    "cache_write_tokens": row.cache_write_tokens,
+                    "reasoning_tokens": row.reasoning_tokens,
+                    "measurement_type": row.measurement_type.value,
+                    "quality": row.quality.value,
+                    "parser_version": row.parser_version,
+                    "model_name": row.model_name,
+                    "session_id": row.session_id,
+                    "model_attribution": row.model_attribution,
+                } for row in chunk])
             self.session.execute(
                 insert(SyncCursorRecord)
                 .values(
@@ -368,12 +374,14 @@ class UsageRepository:
                 )
                 if cast(CursorResult[Any], state_result).rowcount != 1:
                     raise LookupError("source disappeared before scan persistence")
+        report("saving", records_saved=len(events), records_total=len(events))
         return ImportOutcome(
             inserted_events=inserted_events,
             duplicate_events=len(events) - inserted_events,
             cursor=cursor,
             partial_final_record=partial_final_record,
             unsupported_records=unsupported_records,
+            visible_change=visible_change or inserted_events > 0,
         )
 
     def current_cursor(self, source_id: str) -> SyncCursor | None:
@@ -390,6 +398,20 @@ class UsageRepository:
                 source_unsupported_records=cursor.source_unsupported_records,
             )
 
+    def remove_disabled_usage(self) -> None:
+        """Drop derived data for deliberately disabled sources during a rebuild."""
+        disabled = select(SourceRecord.source_id).where(SourceRecord.state == SourceState.DISABLED.value)
+        with self.session.begin():
+            self.session.execute(delete(UsageEventRecord).where(UsageEventRecord.source_id.in_(disabled)))
+            self.session.execute(delete(SyncCursorRecord).where(SyncCursorRecord.source_id.in_(disabled)))
+
+    def current_cursors(self) -> dict[str, SyncCursor]:
+        with self.session.begin():
+            return {row.source_id: SyncCursor(
+                row.source_id, row.byte_offset, row.source_mtime_ns, row.parser_version,
+                row.prefix_fingerprint, row.source_unsupported_records,
+            ) for row in self.session.scalars(select(SyncCursorRecord))}
+
     def clear_normalized(self) -> None:
         """Clear only derived events and cursors; preserve approvals and audit history."""
         with self.session.begin():
@@ -404,23 +426,25 @@ class UsageRepository:
             func.row_number().over(
                 partition_by=(records.connector_id, records.record_identity),
                 order_by=(
-                    case((
-                        records.input_total_tokens.is_not(None)
-                        & records.output_total_tokens.is_not(None), 1,
-                    ), else_=0).desc(),
+                    case((records.input_total_tokens.is_not(None)
+                          & records.output_total_tokens.is_not(None), 1), else_=0).desc(),
                     (func.coalesce(records.input_total_tokens, 0)
                      + func.coalesce(records.output_total_tokens, 0)).desc(),
                     case((records.model_name.is_not(None), 1), else_=0).desc(),
                     records.timestamp.desc(), records.source_id,
                 ),
             ).label("message_rank"),
-        ).where(records.measurement_type == MeasurementType.DELTA.value).subquery()
-        events = aliased(UsageEventRecord, ranked)
-        delta = or_(
-            events.provider != Provider.CLAUDE_CODE.value,
-            ranked.c.message_rank == 1,
-        )
-        return events, delta
+        ).where(records.measurement_type == MeasurementType.DELTA.value,
+                records.provider == Provider.CLAUDE_CODE.value).subquery()
+        # Other providers already have source-scoped identities. Only Claude
+        # copies require the global window, selected before any date bound.
+        canonical = union_all(
+            select(records).where(records.measurement_type == MeasurementType.DELTA.value,
+                                  records.provider != Provider.CLAUDE_CODE.value),
+            select(*(ranked.c[column.name] for column in records.__table__.columns))
+                .where(ranked.c.message_rank == 1),
+        ).subquery()
+        return aliased(UsageEventRecord, canonical), true()
 
     def observed_events(
         self, start: datetime | None = None, end: datetime | None = None
@@ -517,3 +541,31 @@ class UsageRepository:
                 source_freshness=freshness,
                 quality_counts=quality_counts,
             )
+
+    def quality_page(self, offset: int, limit: int) -> dict[str, Any]:
+        """Bound source health output and include names in the same query."""
+        events, delta = self._canonical_deltas()
+        latest = select(UsageEventRecord.source_id,
+                        func.max(UsageEventRecord.timestamp).label("latest_event_at"))\
+            .where(UsageEventRecord.measurement_type == MeasurementType.DELTA.value)\
+            .group_by(UsageEventRecord.source_id).subquery()
+        with self.session.begin():
+            quality = {value.value: 0 for value in Quality}
+            quality.update({name: count for name, count in self.session.execute(select(events.quality, func.count())
+                .where(delta).group_by(events.quality))})
+            states = {name: count for name, count in self.session.execute(select(SourceRecord.state, func.count())
+                .group_by(SourceRecord.state))}
+            rows = self.session.execute(select(SourceRecord.source_id, SourceRecord.display_name,
+                SourceRecord.state, latest.c.latest_event_at,
+                SyncCursorRecord.source_unsupported_records)
+                .outerjoin(latest, latest.c.source_id == SourceRecord.source_id)
+                .outerjoin(SyncCursorRecord, SyncCursorRecord.source_id == SourceRecord.source_id)
+                .order_by(SourceRecord.source_id).offset(offset).limit(limit)).all()
+            return {"quality_counts": quality, "source_count": sum(states.values()),
+                    "state_counts": states,
+                    "approved_source_count": sum(states.get(state.value, 0) for state in APPROVED_SOURCE_STATES),
+                    "offset": offset, "limit": limit,
+                    "source_freshness": [{"source_id": source_id, "display_name": name,
+                        "state": state, "latest_event_at": stamp.replace(tzinfo=UTC).isoformat() if stamp else None,
+                        "unsupported_records": unsupported}
+                        for source_id, name, state, stamp, unsupported in rows]}

@@ -22,6 +22,7 @@ from tokenhub.domain.models import (
     SyncCursor,
     UsageEvent,
 )
+from tokenhub.ingestion.progress import progress_stream
 from tokenhub.security.paths import open_source_path
 
 _MAX_TOKEN_VALUE = 2**63 - 1
@@ -177,7 +178,7 @@ def parse_copilot_chat_jsonl(source: SourceDescriptor, cursor: SyncCursor | None
     unsupported = offset = 0
     partial = False
     hasher = hashlib.sha256()
-    with os.fdopen(descriptor, "rb") as stream:
+    with progress_stream(os.fdopen(descriptor, "rb")) as stream:
         metadata = os.fstat(stream.fileno())
         while line := stream.readline():
             if not line.endswith(b"\n"):

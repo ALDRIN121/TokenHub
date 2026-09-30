@@ -93,3 +93,63 @@ def test_usage_period_preserves_unknown_empty_totals(app_services: Services) -> 
     )
     assert result['totals']['workload_tokens'] is None
     assert result['totals']['event_count'] == 0
+
+
+def test_sql_aggregates_match_reference_without_loading_event_objects(app_services, monkeypatch):
+    from tokenhub.analytics.breakdown import usage_breakdown
+    usage = app_services.usage_repository
+    for source in ('a', 'b'):
+        usage.persist_scan([
+            replace(event(source, 'same', None, 'copy'), timestamp=datetime(2026, 9, 26, tzinfo=UTC)),
+            replace(event(source, source + '-one', 'm', source), model_attribution='session'),
+            replace(event(source, source + '-two', 'm', source), input_total_tokens=None),
+            replace(event(source, source + '-three', None, source), provider=Provider.CODEX, connector_id='codex-local'),
+        ], SyncCursor(source, 0, None, 'test'))
+    expected = usage_breakdown(usage.observed_events())
+    def forbidden(*args, **kwargs):
+        raise AssertionError('analytics loaded the entire event history')
+    monkeypatch.setattr(usage, 'observed_events', forbidden)
+    actual = app_services.analytics.usage_breakdown()
+    assert actual['totals'] == expected['totals']
+    for kind, keys in [('providers', ('provider',)), ('models', ('provider', 'model_name')), ('sessions', ('provider', 'session_key'))]:
+        def normalized(rows, keys=keys):
+            return {tuple(row[key] for key in keys): {k: v for k, v in row.items() if k != 'models'} for row in rows}
+        assert normalized(actual[kind]) == normalized(expected[kind])
+
+
+def test_usage_pages_sort_unknowns_last_and_filter_before_pagination(app_services):
+    usage = app_services.usage_repository
+    usage.persist_scan([
+        replace(event('a', str(index), f'model-{index:03}', f'session-{index}'), input_total_tokens=index)
+        for index in range(60)
+    ] + [replace(event('a', 'unknown', None, 'unknown'), input_total_tokens=None)], SyncCursor('a', 0, None, 'test'))
+    first = app_services.analytics.usage_page('models', limit=25)
+    second = app_services.analytics.usage_page('models', limit=25, offset=25)
+    assert first['total'] == second['total'] == 61
+    assert len(first['items']) == len(second['items']) == 25
+    assert first['items'][0]['model_name'] == 'model-059'
+    assert {row['model_name'] for row in first['items']}.isdisjoint(row['model_name'] for row in second['items'])
+    ascending = app_services.analytics.usage_page('models', sort='input_total_tokens', direction='ascending', limit=100)
+    assert ascending['items'][0]['input_total_tokens'] == 0
+    assert ascending['items'][-1]['input_total_tokens'] is None
+    filtered = app_services.analytics.usage_page('sessions', query='model-059', limit=25)
+    assert filtered['total'] == 1
+    assert filtered['items'][0]['workload_tokens'] == 84
+
+
+def test_canonical_selection_happens_before_date_filter_for_pages(app_services):
+    usage = app_services.usage_repository
+    usage.persist_scan([event('a', 'copied', 'early', 'first')], SyncCursor('a', 0, None, 'test'))
+    usage.persist_scan([replace(event('b', 'copied', 'later', 'second'), timestamp=datetime(2026, 9, 28, tzinfo=UTC), input_total_tokens=200)], SyncCursor('b', 0, None, 'test'))
+    result = app_services.analytics.usage_page('models', start=datetime(2026, 9, 27, tzinfo=UTC), end=datetime(2026, 9, 28, tzinfo=UTC))
+    assert result['total'] == 0
+    assert result['items'] == []
+
+
+def test_model_name_pages_preserve_numeric_sorting_and_unknowns_last(app_services):
+    app_services.usage_repository.persist_scan([
+        event('a', 'one', 'model-2', 'one'), event('a', 'two', 'model-10', 'two'),
+        event('a', 'unknown', None, 'three'),
+    ], SyncCursor('a', 0, None, 'test'))
+    result = app_services.analytics.usage_page('models', sort='identity', direction='ascending')
+    assert [row['model_name'] for row in result['items']] == ['model-2', 'model-10', None]

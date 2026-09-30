@@ -38,7 +38,8 @@ interface ProviderCardProps {
 export function ProviderCard({ provider, actionsDisabled = false, autoImportEnabled = false, onAutoImportChange }: ProviderCardProps) {
   const evidence = provider.evidence_codes.map(evidenceLabel);
   const evidenceText = evidence.length > 0 ? evidence.join(', ') : 'none recorded';
-  const supported = provider.sources.some((source) => source.scan_supported);
+  const sourceCount = provider.source_count ?? provider.sources.length;
+  const supported = (provider.supported_source_count ?? provider.sources.filter((source) => source.scan_supported).length) > 0;
   const detected = provider.evidence_codes.some((code) => code !== 'discovery_error');
   const unreadableFormat = provider.evidence_codes.includes('unsupported_session_format');
   const detectionFailed = provider.state === 'error' || provider.evidence_codes.includes('discovery_error');
@@ -50,8 +51,8 @@ export function ProviderCard({ provider, actionsDisabled = false, autoImportEnab
     hermes: 'Hermes Agent usage', vscode_copilot: 'Copilot sessions',
     antigravity: 'Antigravity conversations',
   };
-  const awaitingApproval = provider.sources.filter((source) => source.scan_supported && source.state === 'discovered').length;
-  const approved = provider.sources.filter((source) => source.scan_supported && RESCANNABLE_STATES.has(source.state)).length;
+  const awaitingApproval = provider.awaiting_approval ?? provider.sources.filter((source) => source.scan_supported && source.state === 'discovered').length;
+  const approved = provider.approved_count ?? provider.sources.filter((source) => source.scan_supported && RESCANNABLE_STATES.has(source.state)).length;
 
   return (
     <article className={`provider-card provider-card--${provider.provider ?? 'unknown'}`} aria-labelledby={`provider-${provider.connector_id}`}>
@@ -66,14 +67,14 @@ export function ProviderCard({ provider, actionsDisabled = false, autoImportEnab
 
       {supported && onAutoImportChange ? (
         <div className="provider-card__automation">
-          <p className="provider-card__note">{provider.sources.length} {isCopilot ? (provider.sources.length === 1 ? 'session' : 'sessions') : (provider.sources.length === 1 ? 'source' : 'sources')} found · {approved} approved{awaitingApproval ? ` · ${awaitingApproval} awaiting approval` : ''}. {autoImportEnabled ? 'Current and new usage updates automatically.' : 'One approval imports saved usage and includes new sessions automatically.'}</p>
+          <p className="provider-card__note">{sourceCount} {isCopilot ? (sourceCount === 1 ? 'session' : 'sessions') : (sourceCount === 1 ? 'source' : 'sources')} found · {approved} approved{awaitingApproval ? ` · ${awaitingApproval} awaiting approval` : ''}. {autoImportEnabled ? 'Current and new usage updates automatically.' : 'One approval imports saved usage and includes new sessions automatically.'}</p>
           <button type="button" className={`button ${autoImportEnabled ? 'button--secondary' : 'button--primary'}`} disabled={actionsDisabled} onClick={() => onAutoImportChange(!autoImportEnabled)}>
             <Icon name={autoImportEnabled ? 'refresh' : 'check'} />{autoImportEnabled ? 'Stop including new sessions' : `Approve and import ${usageLabel[provider.provider ?? ''] ?? provider.display_name}`}
           </button>
         </div>
       ) : null}
 
-      {provider.sources.length === 0 ? (
+      {sourceCount === 0 ? (
         <p className="provider-card__note">
           {detectionFailed ? 'Source availability is unknown until detection succeeds.' : unreadableFormat ? `${provider.display_name} saved conversations were found, but they are not in a format TokenHub can read. Nothing is imported or estimated.` : `No local source was found for ${provider.display_name}.`}
         </p>

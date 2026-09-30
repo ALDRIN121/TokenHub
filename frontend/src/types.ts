@@ -28,6 +28,10 @@ export interface ProviderSummary {
   confidence: string;
   evidence_codes: string[];
   sources: SourceSummary[];
+  source_count?: number;
+  supported_source_count?: number;
+  approved_count?: number;
+  awaiting_approval?: number;
 }
 
 export interface DiscoveryResponse {
@@ -58,6 +62,7 @@ export interface SourceFreshness {
   state: string;
   latest_event_at: string | null;
   unsupported_records: number | null;
+  display_name?: string;
 }
 
 export interface DashboardSummary {
@@ -75,6 +80,9 @@ export interface DashboardSummary {
 export interface DataQualityResponse {
   quality_counts: Record<string, number>;
   source_freshness: SourceFreshness[];
+  source_count?: number;
+  approved_source_count?: number;
+  state_counts?: Record<string, number>;
 }
 
 export interface CollectionStatus {
@@ -85,7 +93,35 @@ export interface CollectionStatus {
   failed_source_count: number;
   /** Changes only when discovery, source states, or usage may have changed. */
   data_version: number;
+  active_job?: CollectionJob | null;
+  latest_job?: CollectionJob | null;
+  queued_jobs?: number;
 }
+
+export interface CollectionJob {
+  job_id: string;
+  kind: string;
+  state: 'queued' | 'running' | 'completed' | 'completed_with_errors' | 'failed' | 'interrupted';
+  stage: string;
+  provider: string | null;
+  files_total: number | null;
+  files_completed: number;
+  bytes_read: number;
+  bytes_total: number | null;
+  records_read: number;
+  records_saved: number;
+  records_total: number | null;
+  skipped_files: number;
+  inserted_events: number;
+  duplicate_events: number;
+  unsupported_records: number;
+  elapsed_seconds: number;
+  error: string | null;
+  result: ImportOutcome | RebuildOutcome | null;
+}
+
+export interface AcceptedJob { job_id: string }
+export interface UsagePage<T> { items: T[]; total: number; offset: number; limit: number; data_version?: number }
 
 export interface UsageTotals {
   workload_tokens: number | null;
@@ -112,6 +148,7 @@ export interface SessionUsage extends UsageTotals {
   provider: string;
   session_key: string;
   models: (UsageTotals & { model_name: string | null })[];
+  contribution?: UsageTotals;
 }
 
 export interface UsageBreakdown {
@@ -119,4 +156,7 @@ export interface UsageBreakdown {
   providers: (UsageTotals & { provider: string })[];
   models: ModelUsage[];
   sessions: SessionUsage[];
+  paging?: boolean;
+  unknown_model_events?: Record<string, number>;
+  data_version?: number;
 }

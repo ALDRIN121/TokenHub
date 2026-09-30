@@ -11,6 +11,7 @@ from tokenhub.connectors.protocol import (
 from tokenhub.connectors.registry import ConnectorRegistry
 from tokenhub.database.repositories import SourceRepository
 from tokenhub.domain.models import SourceDescriptor, SourceState
+from tokenhub.ingestion.progress import ScanInterrupted, report
 
 
 class DiscoveryService:
@@ -41,6 +42,7 @@ class DiscoveryService:
         results = self.registry.discover_all(context)
         self._candidates.clear()
         for connector, result in zip(self.registry.connectors, results, strict=True):
+            report()
             if result.state is SourceState.ERROR:
                 continue
             try:
@@ -56,12 +58,23 @@ class DiscoveryService:
                     {candidate.source_id: candidate for candidate in candidates}
                 )
                 result.sources = tuple(views)
+            except ScanInterrupted:
+                raise
             except Exception:  # noqa: BLE001 - keep other providers visible
                 result.state = SourceState.ERROR
                 result.evidence_codes = ("discovery_error",)
                 result.sources = ()
         self._last_results = results
-        signature = tuple(
+        signature = self._result_signature(results)
+        changed = signature != self._signature
+        self._signature = signature
+        if changed and self.on_change is not None:
+            self.on_change()
+        return results
+
+    @staticmethod
+    def _result_signature(results: list[DetectionResult]) -> tuple[object, ...]:
+        return tuple(
             (
                 result.connector_id,
                 result.state,
@@ -70,11 +83,19 @@ class DiscoveryService:
             )
             for result in results
         )
-        changed = signature != self._signature
-        self._signature = signature
-        if changed and self.on_change is not None:
-            self.on_change()
-        return results
+
+    def refresh_states(self) -> None:
+        """Remember states already published by a scan, without walking again."""
+        if self._last_results is None:
+            return
+        with self.source_repository.session.begin():
+            stored = self.source_repository._existing_sources([
+                source.source_id for result in self._last_results for source in result.sources
+            ])
+            for result in self._last_results:
+                result.sources = tuple(source.model_copy(update={"state": SourceState(stored[source.source_id].state)})
+                    if source.source_id in stored else source for source in result.sources)
+        self._signature = self._result_signature(self._last_results)
 
     def candidate(self, source_id: str) -> SourceDescriptor:
         return self._candidates[source_id]

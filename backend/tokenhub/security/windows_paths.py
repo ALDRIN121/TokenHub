@@ -164,6 +164,8 @@ def list_directory(descriptor: int) -> list[str]:
     identity = _identity(descriptor)
     if _identity_at(path) != identity:
         raise ValueError("approved directory changed")
+    from tokenhub.ingestion.progress import report
+    report()
     names = os.listdir(path)
     if _identity_at(path) != identity:
         raise ValueError("approved directory changed")

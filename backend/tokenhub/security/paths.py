@@ -55,6 +55,8 @@ def list_directory(descriptor: int) -> list[str]:
     if os.name == "nt":
         return windows_paths.list_directory(descriptor)
     _require_secure_directory_enumeration()
+    from tokenhub.ingestion.progress import report
+    report()
     return os.listdir(descriptor)
 
 

@@ -21,6 +21,7 @@ from tokenhub.domain.models import (
     SyncCursor,
     UsageEvent,
 )
+from tokenhub.ingestion.progress import progress_stream, report
 from tokenhub.security.paths import open_source_path
 
 _TOKEN_FIELDS = (
@@ -42,6 +43,8 @@ def parse_hermes_sqlite(
     # SQLite normally reopens paths and sidecars itself. Copy through the trusted
     # descriptor boundary first so it cannot follow a replaced path or write to
     # the provider database. Include WAL: active sessions may exist only there.
+    events: list[UsageEvent] = []
+    unsupported = 0
     with TemporaryDirectory(prefix="tokenhub-hermes-") as directory:
         snapshot = Path(directory) / "state.db"
         descriptor = open_source_path(
@@ -49,7 +52,7 @@ def parse_hermes_sqlite(
             source.approved_root,
             root_identity,
         )
-        with os.fdopen(descriptor, "rb") as stream:
+        with progress_stream(os.fdopen(descriptor, "rb")) as stream:
             metadata = os.fstat(stream.fileno())
             with snapshot.open("wb") as target:
                 shutil.copyfileobj(stream, target)
@@ -65,7 +68,7 @@ def parse_hermes_sqlite(
             except FileNotFoundError:
                 journal_metadata = None
             else:
-                with os.fdopen(wal_descriptor, "rb") as journal:
+                with progress_stream(os.fdopen(wal_descriptor, "rb")) as journal:
                     journal_metadata = os.fstat(journal.fileno())
                     with snapshot.with_name("state.db-wal").open("wb") as target:
                         shutil.copyfileobj(journal, target)
@@ -99,30 +102,28 @@ def parse_hermes_sqlite(
                     field if field in columns else f"NULL AS {field}"
                     for field in fields
                 ]
-                rows = database.execute(
+                for index, row in enumerate(database.execute(
                     "SELECT " + ", ".join(expressions) + " FROM sessions ORDER BY id"
-                ).fetchall()
+                )):
+                    report("reading", records_read=index + 1)
+                    event = _session_event(dict(zip(fields, row, strict=True)), source)
+                    if event is None:
+                        unsupported += 1
+                    elif any(
+                        (getattr(event, field) or 0)
+                        for field in (
+                            "input_total_tokens",
+                            "output_total_tokens",
+                            "cache_read_tokens",
+                            "cache_write_tokens",
+                            "reasoning_tokens",
+                        )
+                    ):
+                        events.append(event)
             finally:
                 database.close()
         except sqlite3.Error as error:
             raise ValueError("Hermes usage database is unavailable") from error
-    events = []
-    unsupported = 0
-    for row in rows:
-        event = _session_event(dict(zip(fields, row, strict=True)), source)
-        if event is None:
-            unsupported += 1
-        elif any(
-            (getattr(event, field) or 0)
-            for field in (
-                "input_total_tokens",
-                "output_total_tokens",
-                "cache_read_tokens",
-                "cache_write_tokens",
-                "reasoning_tokens",
-            )
-        ):
-            events.append(event)
     signature = [
         (
             event.record_identity,

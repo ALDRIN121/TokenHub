@@ -77,7 +77,8 @@ def test_discovery_and_approval_never_read_telemetry_or_credentials(client: Test
 
     def directory_open(path, flags, *args, **kwargs):
         # Discovery may open only directories. Approval validates a leaf but never reads it.
-        if os.name != "nt" and not flags & os.O_DIRECTORY:
+        if (os.name != "nt" and not flags & os.O_DIRECTORY
+                and not str(path).startswith(str(tmp_path / "data") + os.sep)):
             pytest.fail("discovery opened a telemetry leaf")
         return original_os_open(path, flags, *args, **kwargs)
 

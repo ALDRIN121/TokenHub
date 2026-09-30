@@ -18,6 +18,7 @@ from tokenhub.domain.models import (
     SyncCursor,
     UsageEvent,
 )
+from tokenhub.ingestion.progress import progress_stream
 from tokenhub.security.paths import open_source_path
 
 _MAX_TOKEN_VALUE = 2**63 - 1
@@ -39,7 +40,7 @@ def parse_claude_jsonl(
         source.approved_root,
         (source.approved_root_device, source.approved_root_inode),
     )
-    with os.fdopen(descriptor, "rb") as stream:
+    with progress_stream(os.fdopen(descriptor, "rb")) as stream:
         metadata = os.fstat(stream.fileno())
         while line := stream.readline():
             if not line.endswith(b"\n"):

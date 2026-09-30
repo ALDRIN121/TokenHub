@@ -425,3 +425,23 @@ h3 { font-size: 15px; font-weight: 650; letter-spacing: -.2px; }
 .sort-direction:hover { border-color: var(--accent); background: var(--accent-soft); }
 .sort-direction .icon { width: 16px; height: 16px; }
 @media (max-width: 650px) { .ledger-controls { gap: 6px; } .sort-direction { width: 32px; } }
+
+.import-progress { margin: 0 0 24px; padding: 18px 22px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 2px 12px rgba(0, 0, 0, .02); }
+.import-progress__heading { display: flex; align-items: center; gap: 10px; margin-bottom: 13px; color: var(--accent); font-size: 13px; }
+.import-progress__heading > span { margin-left: auto; font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.import-progress progress { display: block; width: 100%; height: 8px; border: 0; border-radius: 8px; overflow: hidden; accent-color: var(--accent); background: var(--surface-muted); }
+.import-progress progress::-webkit-progress-bar { background: var(--surface-muted); border-radius: 8px; }
+.import-progress progress::-webkit-progress-value { background: var(--accent); border-radius: 8px; transition: width .2s; }
+.import-progress progress::-moz-progress-bar { background: var(--accent); border-radius: 8px; }
+.import-progress progress:not([value]) { background: linear-gradient(90deg, var(--surface-muted) 25%, var(--accent-soft) 50%, var(--surface-muted) 75%); background-size: 200% 100%; animation: import-pulse 1.5s linear infinite; }
+.import-progress__counts { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; font-size: 11px; color: var(--text); flex-wrap: wrap; }
+.import-progress__file { display: grid; gap: 6px; max-width: 420px; margin-top: 13px; font-size: 10px; color: var(--text-muted); }
+.import-progress__file progress { height: 4px; }
+.import-progress p { margin: 12px 0 0; font-size: 11px; color: var(--text-muted); line-height: 1.6; }
+.import-progress--warning .import-progress__heading { color: var(--text); }
+.import-progress .button { margin-top: 12px; }
+.page-controls { display: flex; gap: 8px; }
+.page-loading { color: var(--text-muted); font-size: 11px; margin-bottom: 10px; }
+@keyframes import-pulse { from { background-position: 200% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) { .import-progress progress { animation: none !important; transition: none !important; } .import-progress .is-spinning { animation: none; } }
+@media (max-width: 650px) { .import-progress { padding: 15px; } .import-progress__heading { flex-wrap: wrap; } .ledger-bottom { flex-wrap: wrap; gap: 12px; } }

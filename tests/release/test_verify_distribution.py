@@ -25,7 +25,7 @@ def test_source_archive_normalizes_project_and_backend_prefixes(tmp_path: Path) 
         "backend/tokenhub/web/index.html",
         "backend/tokenhub/web/assets/app.js",
         "backend/tokenhub/web/assets/app.css",
-        "backend/tokenhub/database/migrations/versions/0005_usage_metadata.py",
+        "backend/tokenhub/database/migrations/versions/0006_performance_jobs.py",
         "backend/tokenhub.egg-info/entry_points.txt",
         "LICENSE",
     )

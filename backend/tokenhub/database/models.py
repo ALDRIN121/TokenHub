@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -31,7 +31,12 @@ class SourceRecord(Base):
 
 class UsageEventRecord(Base):
     __tablename__ = "usage_events"
-    __table_args__ = (UniqueConstraint("source_id", "record_identity", name="uq_usage_events_source_record"),)
+    __table_args__ = (
+        UniqueConstraint("source_id", "record_identity", name="uq_usage_events_source_record"),
+        Index("ix_usage_events_time", "measurement_type", "timestamp"),
+        Index("ix_usage_events_model_time", "provider", "model_name", "timestamp"),
+        Index("ix_usage_events_message", "connector_id", "record_identity"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     connector_id: Mapped[str] = mapped_column(String, nullable=False)

@@ -59,6 +59,7 @@ def test_folder_consent_covers_new_sessions_and_survives_restart(
         tmp_path / 'home', {}, lambda _: None
     )
     with TestClient(restarted, base_url='http://127.0.0.1:7432') as second:
+        restarted.state.container.collect()
         assert second.get('/api/v1/collection').json()['codex_auto_import'] is True
         assert second.get('/api/v1/dashboard').json()['workload_tokens'] == 155
 
@@ -153,6 +154,7 @@ def test_restart_reparses_old_quality_without_duplicating_totals(
     restarted = create_app(container.settings)
     restarted.state.container.discovery_context = DiscoveryContext(tmp_path / 'home', {}, lambda _: None)
     with TestClient(restarted, base_url='http://127.0.0.1:7432') as second:
+        restarted.state.container.collect()
         assert second.get('/api/v1/dashboard').json()['workload_tokens'] == 125
         freshness = second.get('/api/v1/data-quality').json()['source_freshness'][0]
         assert freshness['unsupported_records'] == 0
@@ -169,6 +171,7 @@ def test_restart_does_not_add_unchanged_import_history(client: TestClient, tmp_p
     restarted = create_app(container.settings)
     restarted.state.container.discovery_context = DiscoveryContext(tmp_path / 'home', {}, lambda _: None)
     with TestClient(restarted, base_url='http://127.0.0.1:7432'):
+        restarted.state.container.collect()
         session = restarted.state.container.services.session
         assert session.execute(text('select count(*) from import_runs')).scalar() == runs
         session.rollback()
@@ -184,6 +187,7 @@ def test_out_of_range_usage_does_not_break_collection_or_restart(
     restarted = create_app(client.app.state.container.settings)
     restarted.state.container.discovery_context = DiscoveryContext(tmp_path / 'home', {}, lambda _: None)
     with TestClient(restarted, base_url='http://127.0.0.1:7432') as second:
+        restarted.state.container.collect()
         assert second.get('/api/v1/dashboard').json()['workload_tokens'] == 125
         assert any(source['unsupported_records'] == 1
                    for source in second.get('/api/v1/data-quality').json()['source_freshness'])
@@ -288,9 +292,9 @@ def test_idle_polling_neither_walks_the_filesystem_nor_bumps_the_version(
     changed = client.get('/api/v1/collection').json()['data_version']
     assert changed > version
     client.get('/api/v1/discovery')
-    assert len(walks) == 3  # the collector's pass, then one refresh for the new version
+    assert len(walks) == 2  # reads reuse the collector's cached discovery
     client.get('/api/v1/discovery')
-    assert len(walks) == 3
+    assert len(walks) == 2
 
 
 def test_new_session_file_bumps_the_version_so_discovery_refreshes(
@@ -312,7 +316,7 @@ def test_rediscovering_unchanged_sources_writes_nothing(client: TestClient) -> N
     from sqlalchemy import event
 
     container = client.app.state.container
-    container.services.discovery.discover()
+    container.execute("discover")
     writes: list[str] = []
 
     @event.listens_for(container._engine, 'before_cursor_execute')
@@ -321,7 +325,7 @@ def test_rediscovering_unchanged_sources_writes_nothing(client: TestClient) -> N
             writes.append(statement)
 
     try:
-        results = container.services.discovery.discover()
+        results = container.execute("discover")
     finally:
         event.remove(container._engine, 'before_cursor_execute', record)
     assert writes == []
@@ -341,7 +345,7 @@ def test_discovery_walks_each_provider_tree_once(
         return original(root)
 
     monkeypatch.setattr(codex_connector, 'anchor_directory', counted)
-    client.app.state.container.services.discovery.discover()
+    client.app.state.container.execute("discover")
     assert anchors == [1]
 
 
@@ -398,6 +402,7 @@ def test_stored_parser_upgrade_does_not_need_rediscovery(client: TestClient, tmp
     restarted = create_app(container.settings)
     restarted.state.container.discovery_context = DiscoveryContext(empty_home, {}, lambda _: None)
     with TestClient(restarted, base_url='http://127.0.0.1:7432') as second:
+        restarted.state.container.collect()
         assert second.get('/api/v1/dashboard').json()['workload_tokens'] == 125
         freshness = second.get('/api/v1/data-quality').json()['source_freshness'][0]
         assert freshness['state'] == 'healthy'
@@ -430,6 +435,7 @@ def test_parser_upgrade_backfills_task_and_model_without_changing_tokens(
     empty_home.mkdir()
     restarted.state.container.discovery_context = DiscoveryContext(empty_home, {}, lambda _: None)
     with TestClient(restarted, base_url='http://127.0.0.1:7432') as second:
+        restarted.state.container.collect()
         result = second.get('/api/v1/usage').json()
         assert result['totals']['workload_tokens'] == 125
         assert result['totals']['event_count'] == 1
@@ -457,3 +463,16 @@ def test_usage_api_keeps_tasks_separate_with_a_shared_app_session(client: TestCl
     assert result['totals']['workload_tokens'] == 250
     assert len(result['sessions']) == 2
     assert 'task-one' not in str(result)
+
+
+def test_append_without_usage_does_not_invalidate_dashboard(client, tmp_path):
+    import json
+    client.post('/api/v1/collection/codex/enable', headers=ORIGIN)
+    container = client.app.state.container
+    container.collect()
+    container.collect()
+    version = client.get('/api/v1/collection').json()['data_version']
+    with (tmp_path / 'home/.codex/sessions/synthetic.jsonl').open('ab') as stream:
+        stream.write((json.dumps({'type': 'turn_context', 'payload': {'model': 'synthetic'}}) + '\n').encode())
+    container.collect()
+    assert client.get('/api/v1/collection').json()['data_version'] == version

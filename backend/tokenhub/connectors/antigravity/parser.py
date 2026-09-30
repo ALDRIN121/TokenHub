@@ -25,6 +25,7 @@ from tokenhub.domain.models import (
     SyncCursor,
     UsageEvent,
 )
+from tokenhub.ingestion.progress import progress_stream, report
 from tokenhub.security.paths import open_source_path
 
 _MAX_COUNT = 2**63 - 1
@@ -75,8 +76,8 @@ def _fields(data: bytes) -> list[tuple[int, int | bytes]]:
     return result
 
 
-def _field(data: bytes, number: int, kind: type[int] | type[bytes]) -> int | bytes | None:
-    return next((value for field, value in _fields(data) if field == number and isinstance(value, kind)), None)
+def _field(data: bytes | list[tuple[int, int | bytes]], number: int, kind: type[int] | type[bytes]) -> int | bytes | None:
+    return next((value for field, value in (_fields(data) if isinstance(data, bytes) else data) if field == number and isinstance(value, kind)), None)
 
 
 def _counter(fields: list[tuple[int, int | bytes]], number: int) -> int | None:
@@ -89,8 +90,9 @@ def _counter(fields: list[tuple[int, int | bytes]], number: int) -> int | None:
 
 def _timestamp(data: bytes) -> datetime | None:
     try:
-        seconds = _field(data, 1, int)
-        nanos = _field(data, 2, int) or 0
+        fields = _fields(data)
+        seconds = _field(fields, 1, int)
+        nanos = _field(fields, 2, int) or 0
         if not isinstance(seconds, int) or not isinstance(nanos, int) or not 0 <= nanos < 1_000_000_000:
             return None
         return datetime.fromtimestamp(seconds + nanos / 1_000_000_000, UTC)
@@ -104,14 +106,16 @@ def _step_times(database: sqlite3.Connection) -> tuple[dict[str, datetime], dict
     for (blob,) in database.execute("SELECT metadata FROM steps WHERE step_type = 15 AND metadata IS NOT NULL"):
         if not isinstance(blob, bytes):
             continue
+        report()
         try:
-            stamp = _field(blob, 1, bytes)
+            fields = _fields(blob)
+            stamp = _field(fields, 1, bytes)
             when = _timestamp(stamp) if isinstance(stamp, bytes) else None
             if when is None:
                 continue
-            usage = _field(blob, 9, bytes)
+            usage = _field(fields, 9, bytes)
             response = _field(usage, 11, bytes) if isinstance(usage, bytes) else None
-            index_message = _field(blob, 20, bytes)
+            index_message = _field(fields, 20, bytes)
             index = _field(index_message, 3, int) if isinstance(index_message, bytes) else None
             if isinstance(response, bytes):
                 by_response[response.decode("utf-8")] = when
@@ -128,7 +132,8 @@ def _generation(
 ) -> UsageEvent | None:
     try:
         chat = _field(blob, 1, bytes)
-        usage = _field(chat, 4, bytes) if isinstance(chat, bytes) else None
+        chat_fields = _fields(chat) if isinstance(chat, bytes) else []
+        usage = _field(chat_fields, 4, bytes)
         if not isinstance(chat, bytes) or not isinstance(usage, bytes):
             return None
         fields = _fields(usage)
@@ -148,12 +153,12 @@ def _generation(
         input_total = fixed + new_input + cache_read
         if input_total > _MAX_COUNT or input_total + total_output > _MAX_COUNT:
             return None
-        response = _field(usage, 11, bytes)
+        response = _field(fields, 11, bytes)
         response_id = response.decode("utf-8") if isinstance(response, bytes) else None
         when = by_response.get(response_id or "") or by_index.get(index)
         if when is None:
             return None
-        model = _field(chat, 19, bytes) or _field(chat, 21, bytes)
+        model = _field(chat_fields, 19, bytes) or _field(chat_fields, 21, bytes)
         model_name = usage_identifier(model.decode("utf-8") if isinstance(model, bytes) else None)
         return UsageEvent(
             connector_id=source.connector_id,
@@ -188,7 +193,7 @@ def _capture(path: Path, source: SourceDescriptor, target: Path) -> os.stat_resu
         descriptor = open_source_path(path, source.approved_root, identity)
     except FileNotFoundError:
         return None
-    with os.fdopen(descriptor, "rb") as stream:
+    with progress_stream(os.fdopen(descriptor, "rb")) as stream:
         before = os.fstat(stream.fileno())
         with target.open("wb") as output:
             shutil.copyfileobj(stream, output)
@@ -207,6 +212,9 @@ def _capture(path: Path, source: SourceDescriptor, target: Path) -> os.stat_resu
 
 
 def parse_antigravity_sqlite(source: SourceDescriptor, cursor: SyncCursor | None) -> ScanResult:
+    events: list[UsageEvent] = []
+    unsupported = 0
+    seen: set[str] = set()
     with TemporaryDirectory(prefix="tokenhub-antigravity-") as directory:
         snapshot = Path(directory) / "conversation.db"
         metadata = _capture(source.canonical_path, source, snapshot)
@@ -220,21 +228,18 @@ def parse_antigravity_sqlite(source: SourceDescriptor, cursor: SyncCursor | None
                 database.execute("PRAGMA query_only=ON")
                 database.execute("PRAGMA trusted_schema=OFF")
                 by_response, by_index = _step_times(database)
-                rows = database.execute("SELECT idx, data FROM gen_metadata ORDER BY idx").fetchall()
+                for index, blob in database.execute("SELECT idx, data FROM gen_metadata ORDER BY idx"):
+                    report("reading", records_read=len(events) + unsupported)
+                    event = _generation(blob, index, by_response, by_index, source) if type(index) is int and isinstance(blob, bytes) else None
+                    if event is None:
+                        unsupported += 1
+                    elif event.record_identity not in seen:
+                        events.append(event)
+                        seen.add(event.record_identity)
             finally:
                 database.close()
         except sqlite3.Error as error:
             raise ValueError("Antigravity usage database is unavailable") from error
-    events: list[UsageEvent] = []
-    unsupported = 0
-    seen: set[str] = set()
-    for index, blob in rows:
-        event = _generation(blob, index, by_response, by_index, source) if type(index) is int and isinstance(blob, bytes) else None
-        if event is None:
-            unsupported += 1
-        elif event.record_identity not in seen:
-            events.append(event)
-            seen.add(event.record_identity)
     fingerprint = hashlib.sha256(json.dumps([
         [(event.record_identity, event.timestamp.isoformat(), event.input_total_tokens,
           event.output_total_tokens, event.cache_read_tokens, event.reasoning_tokens,

@@ -132,7 +132,7 @@ def test_api_app_fixture_reports_all_five_providers(
     client: TestClient, api_app: FastAPI
 ) -> None:
     """Guards the fixture these wire assertions lean on."""
-    results = api_app.state.container.services.discovery.discover()
+    results = api_app.state.container.execute("discover")
     assert {result.connector_id for result in results} == {
         "claude-code-local",
         "codex-local",
@@ -152,6 +152,7 @@ def test_connector_failure_still_reports_a_wire_value(
         raise OSError("synthetic connector failure")
 
     monkeypatch.setattr(registry.connectors[0], "detect", explode)
+    api_app.state.container.collect()
 
     failed = next(
         provider

@@ -747,3 +747,15 @@ def test_disabled_source_cannot_be_read_or_rebuilt(
             )
             == 0
         )
+
+
+def test_failed_rebuild_keeps_previously_imported_usage(app_services: Services) -> None:
+    """A failed source rebuild must not erase its previously committed usage."""
+    source_id = discover_and_approve_codex(app_services)
+    app_services.ingestion.rescan(source_id)
+    before = app_services.analytics.dashboard().workload_tokens
+    assert before is not None
+    app_services.session_file.unlink()
+    outcome = app_services.ingestion.rebuild()
+    assert outcome.failed_source_ids == (source_id,)
+    assert app_services.analytics.dashboard().workload_tokens == before

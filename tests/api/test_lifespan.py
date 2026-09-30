@@ -15,7 +15,7 @@ from tokenhub.settings import TokenHubSettings
 
 from tests.api.conftest import ORIGIN, codex_id
 
-HEAD_REVISION = "0005_usage_metadata"
+HEAD_REVISION = "0006_performance_jobs"
 EXPECTED_TABLES = frozenset(
     {"alembic_version", "sources", "usage_events", "sync_cursors", "import_runs", "auto_import_roots"}
 )
@@ -62,6 +62,7 @@ def test_restart_recovers_a_durable_approval_through_rediscovery(
 
     restarted = create_app(api_app.state.container.settings)
     with TestClient(restarted, base_url="http://127.0.0.1:7432") as second:
+        restarted.state.container.collect()
         # Rediscovery must not reset the approval persisted in the first run.
         assert second.get("/api/v1/discovery").status_code == 200
         freshness = _freshness_by_source(second)

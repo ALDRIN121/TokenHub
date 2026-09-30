@@ -9,6 +9,7 @@ from tokenhub.database.models import SourceRecord
 from tokenhub.database.repositories import SourceRepository, UsageRepository
 from tokenhub.discovery.service import DiscoveryService
 from tokenhub.domain.models import SourceState, SyncCursor
+from tokenhub.ingestion.progress import ScanInterrupted, report
 from tokenhub.ingestion.service import IngestionService, UnsupportedSourceError
 from tokenhub.security.paths import open_source_path
 
@@ -30,13 +31,16 @@ class CollectionService:
         #: Increases whenever data the UI shows may have changed; an idle scan
         #: leaves it alone so clients can poll it instead of refetching everything.
         self.data_version = 0
+        self.on_change: Callable[[], None] | None = None
         self._seen_files: dict[str, tuple[int, ...]] = {}
 
     def bump(self) -> None:
         self.data_version += 1
+        if self.on_change is not None:
+            self.on_change()
 
-    def enable(self, connector_id: str) -> None:
-        results = self.discovery.discover()
+    def enable(self, connector_id: str, should_stop: Callable[[], bool] = lambda: False) -> None:
+        results = self.discovery.last_results or self.discovery.discover()
         candidate = next(
             (
                 self.discovery.candidate(source.source_id)
@@ -49,14 +53,17 @@ class CollectionService:
             raise UnsupportedSourceError("no supported source was discovered")
         self.sources.enable_auto_import(candidate)
         self.bump()
-        self.run_once()
+        self.run_once(should_stop, connector_id=connector_id)
 
-    def run_once(self, should_stop: Callable[[], bool] = lambda: False) -> None:
+    def run_once(self, should_stop: Callable[[], bool] = lambda: False, *, connector_id: str | None = None) -> None:
         """Scan once; ``should_stop`` is checked between sources so shutdown stays prompt."""
+        report("discovering")
         failures: set[str] = set()
         changed = False
         roots = {root.connector_id: root for root in self.sources.auto_import_roots()}
         for result in self.discovery.discover():
+            if connector_id is not None and result.connector_id != connector_id:
+                continue
             root = roots.get(result.connector_id)
             if root is None:
                 continue
@@ -80,7 +87,14 @@ class CollectionService:
                     failures.add(view.source_id)
                     changed = True
 
-        for source in self.sources.approved_sources():
+        cursors = self.usage.current_cursors()
+        approved = [source for source in self.sources.approved_sources()
+                    if source.scan_supported and (connector_id is None or source.connector_id == connector_id)]
+        report(files_total=len(approved), files_completed=0, skipped_files=0)
+        skipped = 0
+        for index, source in enumerate(approved):
+            report("reading", files_completed=index, provider=source.provider, bytes_read=0,
+                   bytes_total=None, records_saved=0, records_total=None)
             if should_stop():
                 return
             if not source.scan_supported:
@@ -108,12 +122,22 @@ class CollectionService:
                 finally:
                     os.close(descriptor)
                 identity = self._identity(source, metadata)
-                cursor = self.usage.current_cursor(source.source_id)
+                cursor = cursors.get(source.source_id)
                 if self._unchanged(source, metadata, identity, cursor):
+                    skipped += 1
+                    report(skipped_files=skipped)
                     continue
-                self.ingestion.rescan(source.source_id, record_unchanged=False)
+                before_state = source.state
+                outcome = self.ingestion.rescan(source.source_id, record_unchanged=False)
                 self._seen_files[source.source_id] = identity
-                changed = True
+                if (outcome.visible_change
+                    or cursor is None
+                    or outcome.cursor.source_unsupported_records != cursor.source_unsupported_records
+                    or self.sources.get(source.source_id).state != before_state):
+                    changed = True
+                    self.bump()
+            except ScanInterrupted:
+                raise
             except FileNotFoundError:
                 changed = True
                 # A removed source is not a failure: the provider deleted it.
@@ -126,6 +150,7 @@ class CollectionService:
                 self.sources.session.rollback()
                 self.sources.set_state(source.source_id, SourceState.ERROR)
                 failures.add(source.source_id)
+        report(files_completed=len(approved))
         if changed or len(failures) != self.failed_source_count:
             self.bump()
         self.failed_source_count = len(failures)

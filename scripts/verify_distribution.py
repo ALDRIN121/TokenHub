@@ -17,7 +17,7 @@ from contextlib import closing
 from pathlib import Path
 from zipfile import ZipFile
 
-_MIGRATION = "tokenhub/database/migrations/versions/0005_usage_metadata.py"
+_MIGRATION = "tokenhub/database/migrations/versions/0006_performance_jobs.py"
 
 
 def verify_archive(path: Path) -> None:
@@ -106,7 +106,7 @@ def smoke_install(path: Path) -> None:
             database = home / ".tokenhub" / "tokenhub.sqlite3"
             with closing(sqlite3.connect(database)) as connection:
                 revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-            assert revision == ("0005_usage_metadata",), f"unexpected Alembic revision: {revision}"
+            assert revision == ("0006_performance_jobs",), f"unexpected Alembic revision: {revision}"
             assert _run([str(tokenhub), "status"], env=env).strip() == url
             assert _run([str(tokenhub), "start", "--no-open"], env=env).strip() == url
             open_script = (

@@ -1,0 +1,146 @@
+{
+  "codex": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "python": "3.12.7",
+    "workloads": [
+      {
+        "events": 1000,
+        "provider": "codex",
+        "source_files": 10,
+        "discovery_and_approval_seconds": 0.022143874999528634,
+        "import_seconds": 0.05572062499959429,
+        "parse_seconds": 0.014040710998415307,
+        "persistence_seconds": 0.034998541997993016,
+        "import_sql": {
+          "BEGIN": 30,
+          "SELECT": 30,
+          "INSERT": 30,
+          "UPDATE": 10
+        },
+        "legacy_analytics_median_seconds": 0.03167291699992347,
+        "idle_seconds": 0.00365791599961085,
+        "idle_sql": {
+          "BEGIN": 4,
+          "SELECT": 4
+        },
+        "first_summary_seconds": 0.027724541999305075,
+        "first_session_page_seconds": 0.02483929200025159,
+        "cached_summary_and_page_median_seconds": 0.0017734170005496708,
+        "summary_and_page_bytes": 4739,
+        "rss_mb": 89.078125
+      },
+      {
+        "events": 10000,
+        "provider": "codex",
+        "source_files": 100,
+        "discovery_and_approval_seconds": 0.17542962500010617,
+        "import_seconds": 0.48281820899956074,
+        "parse_seconds": 0.11524524899778044,
+        "persistence_seconds": 0.3141275430052701,
+        "import_sql": {
+          "BEGIN": 300,
+          "SELECT": 300,
+          "INSERT": 300,
+          "UPDATE": 100
+        },
+        "legacy_analytics_median_seconds": 0.12855662499987375,
+        "idle_seconds": 0.024435708000055456,
+        "idle_sql": {
+          "BEGIN": 4,
+          "SELECT": 4
+        },
+        "first_summary_seconds": 0.05539837499964051,
+        "first_session_page_seconds": 0.08637816700047551,
+        "cached_summary_and_page_median_seconds": 0.001583709000442468,
+        "summary_and_page_bytes": 10570,
+        "rss_mb": 109.21875
+      },
+      {
+        "events": 50000,
+        "provider": "codex",
+        "source_files": 500,
+        "discovery_and_approval_seconds": 0.6857917910001561,
+        "import_seconds": 2.540044250000392,
+        "parse_seconds": 0.5799612190157859,
+        "persistence_seconds": 1.6931970819905473,
+        "import_sql": {
+          "BEGIN": 1500,
+          "SELECT": 1500,
+          "INSERT": 1500,
+          "UPDATE": 500
+        },
+        "legacy_analytics_median_seconds": 0.6612551250000251,
+        "idle_seconds": 0.10095429099965259,
+        "idle_sql": {
+          "BEGIN": 4,
+          "SELECT": 4
+        },
+        "first_summary_seconds": 0.1844882499999585,
+        "first_session_page_seconds": 0.47426991700012877,
+        "cached_summary_and_page_median_seconds": 0.0015002499994807295,
+        "summary_and_page_bytes": 10572,
+        "rss_mb": 114.375
+      }
+    ]
+  },
+  "all_providers": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "python": "3.12.7",
+    "workloads": [
+      {
+        "events": 1000,
+        "provider": "all",
+        "source_files": 9,
+        "discovery_and_approval_seconds": 0.021581959000286588,
+        "import_seconds": 0.05408620799971686,
+        "parse_seconds": 0.020307832001890347,
+        "persistence_seconds": 0.029007499000726966,
+        "import_sql": {
+          "BEGIN": 27,
+          "SELECT": 27,
+          "DELETE": 7,
+          "INSERT": 27,
+          "UPDATE": 9
+        },
+        "legacy_analytics_median_seconds": 0.028166749999400054,
+        "idle_seconds": 0.004516541000157304,
+        "idle_sql": {
+          "BEGIN": 8,
+          "SELECT": 8
+        },
+        "first_summary_seconds": 0.03325008399951912,
+        "first_session_page_seconds": 0.027920375000576314,
+        "cached_summary_and_page_median_seconds": 0.0016495419995408156,
+        "summary_and_page_bytes": 11710,
+        "rss_mb": 91.734375
+      },
+      {
+        "events": 10000,
+        "provider": "all",
+        "source_files": 81,
+        "discovery_and_approval_seconds": 0.1155039580007724,
+        "import_seconds": 0.45991070799937006,
+        "parse_seconds": 0.15369711999755964,
+        "persistence_seconds": 0.265974293999534,
+        "import_sql": {
+          "BEGIN": 243,
+          "SELECT": 246,
+          "DELETE": 61,
+          "INSERT": 246,
+          "UPDATE": 81
+        },
+        "legacy_analytics_median_seconds": 0.2324125000004642,
+        "idle_seconds": 0.02201654199961922,
+        "idle_sql": {
+          "BEGIN": 8,
+          "SELECT": 8
+        },
+        "first_summary_seconds": 0.07711779100009153,
+        "first_session_page_seconds": 0.13018416700015223,
+        "cached_summary_and_page_median_seconds": 0.0015644170007362845,
+        "summary_and_page_bytes": 12114,
+        "rss_mb": 114.296875
+      }
+    ]
+  }
+}

@@ -28,6 +28,7 @@ def api_app(tmp_path: Path) -> FastAPI:
 @pytest.fixture
 def client(api_app: FastAPI) -> Iterator[TestClient]:
     with TestClient(api_app, base_url="http://127.0.0.1:7432") as http:
+        api_app.state.container.collect()
         yield http
 
 
