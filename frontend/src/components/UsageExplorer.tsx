@@ -149,6 +149,11 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
   const largest = models.reduce((value, row) => Math.max(value, row.workload_tokens ?? 0), 0);
   const unknownModels = remote ? Object.entries(data.unknown_model_events ?? {}).filter(([id]) => provider === 'all' || provider === id).reduce((total, [, value]) => total + value, 0) : data.models.filter((row) => row.model_name === null && (provider === 'all' || row.provider === provider)).reduce((count, row) => count + row.event_count, 0);
 
+  const modelGroups = remote ? mode === 'models' && page.mode === 'models' ? page.total
+    : provider === 'all' ? data.providers.reduce((total, row) => total + row.model_count + Number((data.unknown_model_events?.[row.provider] ?? 0) > 0), 0)
+    : (summary?.model_count ?? 0) + Number((data.unknown_model_events?.[provider] ?? 0) > 0)
+    : models.length;
+
   function changeSort(key: SortKey, toggle = true) {
     setDirection(toggle && sort === key ? (direction === 'ascending' ? 'descending' : 'ascending') : key === 'identity' ? 'ascending' : 'descending');
     setSort(key);
@@ -198,7 +203,7 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
     <div className="overview-details"><UsageComposition dashboard={visibleSummary ?? { ...data.totals, workload_tokens: null, input_total_tokens: null, output_total_tokens: null, event_count: 0 }} /><aside className="privacy-card" id="privacy-note"><span className="privacy-card__icon"><Icon name="shield" /></span><h3>Your data stays yours.</h3><p>TokenHub parses approved local usage sources and retains only usage metadata. Prompts, transcripts, credentials, and provider accounts are never stored or sent anywhere.</p><span><Icon name="check" />No data leaves this machine</span></aside></div>
     {data.totals.event_count === 0 ? <div className="explorer-empty"><Icon name="sources" /><h3>Your usage explorer starts with an import</h3><p>Connect an agent’s local sources to see models and sessions here.</p><a className="button button--primary" href="#local-sources">Connect local sources<Icon name="arrow" /></a></div> : <>
       <div className="ledger-toolbar">
-        {selected ? <div className="model-breadcrumb"><button type="button" onClick={showModels}><Icon name="arrow" />All models</button><span>/</span><h3>{modelName(selected.model_name)}</h3><span className={`agent-label agent-color--${selected.provider}`}>{agentName(selected.provider)}</span></div> : <div className="ledger-tabs" aria-label="Usage grouping"><button type="button" aria-pressed={mode === 'models'} onClick={showModels}>Models <span>{remote ? summary?.model_count ?? 0 : models.length} groups</span></button><button type="button" aria-pressed={mode === 'sessions'} onClick={() => { switchMode('sessions'); setQuery(''); }}>Sessions <span>{summary?.session_count ?? 0}</span></button></div>}
+        {selected ? <div className="model-breadcrumb"><button type="button" onClick={showModels}><Icon name="arrow" />All models</button><span>/</span><h3>{modelName(selected.model_name)}</h3><span className={`agent-label agent-color--${selected.provider}`}>{agentName(selected.provider)}</span></div> : <div className="ledger-tabs" aria-label="Usage grouping"><button type="button" aria-pressed={mode === 'models'} onClick={showModels}>Models <span>{modelGroups} groups</span></button><button type="button" aria-pressed={mode === 'sessions'} onClick={() => { switchMode('sessions'); setQuery(''); }}>Sessions <span>{summary?.session_count ?? 0}</span></button></div>}
         <div className="ledger-controls"><label className="usage-search"><Icon name="search" /><input type="search" aria-label="Search usage" placeholder={mode === 'models' ? 'Find a model…' : 'Find a session or model…'} value={query} onChange={(event) => { setQuery(event.target.value); setLimit(25); }} /></label><label className="usage-sort">Sort by<select value={sort} onChange={(event) => changeSort(event.target.value as SortKey, false)}>{sortLabels.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button type="button" className="sort-direction" aria-label={`Sort ${direction === 'ascending' ? 'descending' : 'ascending'}`} title={`Sorted ${direction}; click to reverse`} onClick={() => changeSort(sort)}><SortIndicator active direction={direction} /></button></div>
       </div>
       <div className="ledger-summary"><span><strong>{formatMetric(visibleSummary?.workload_tokens)}</strong> tokens{selected ? ' in this model' : provider === 'all' ? ' across all agents' : ` in ${agentName(provider)}`}</span><span>{visibleSummary?.event_count.toLocaleString('en-US') ?? 0} usage records</span><span>{visibleSummary?.session_count ?? 0} sessions</span>{selectedModel?.attribution === 'session' ? <span className="attribution-note">Session-reported model</span> : null}</div>
@@ -229,12 +234,17 @@ function SessionRow({ row, metrics, expanded, toggle, selected, remote = false, 
   const [detailLoading, setDetailLoading] = useState(false);
   const [retry, setRetry] = useState(0);
   const from = range?.from, to = range?.to;
+  useEffect(() => { setDetailOffset(0); }, [from, to]);
   useEffect(() => {
     if (!remote || !expanded) return;
     const controller = new AbortController();
     setDetailLoading(true); setDetailError(false);
     getSessionModels(row.session_key, { ...(from && to ? { from, to } : {}), provider: row.provider, offset: String(detailOffset) }, controller.signal)
-      .then((next) => { if (!controller.signal.aborted) setDetail(next); })
+      .then((next) => {
+        if (controller.signal.aborted) return;
+        if (detailOffset > 0 && detailOffset >= next.total) setDetailOffset(0);
+        else setDetail(next);
+      })
       .catch(() => { if (!controller.signal.aborted) setDetailError(true); })
       .finally(() => { if (!controller.signal.aborted) setDetailLoading(false); });
     return () => controller.abort();

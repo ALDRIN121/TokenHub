@@ -65,3 +65,55 @@ it('switches grouping safely and loads model detail only when expanded', async (
   await userEvent.setup().click(screen.getByRole('button', { name: /^Models / }));
   await screen.findByRole('button', { name: /View sessions for gpt-test / });
 });
+
+it('recovers detail pagination after date bounds or refreshed data shrink a session', async () => {
+  let reduced = false;
+  const offsets: number[] = [];
+  server.use(
+    http.get('/api/v1/usage/models', () => HttpResponse.json({ items: usageFixture.models, total: 1, offset: 0, limit: 25 })),
+    http.get('/api/v1/usage/sessions', () => HttpResponse.json({ items: usageFixture.sessions.map((row) => ({ ...row, models: [] })), total: 1, offset: 0, limit: 25 })),
+    http.get('/api/v1/usage/sessions/:key/models', ({ request }) => {
+      const query = new URL(request.url).searchParams;
+      const offset = Number(query.get('offset'));
+      offsets.push(offset);
+      const narrow = query.has('from') || reduced;
+      const total = narrow ? 1 : 26;
+      return HttpResponse.json({ items: offset >= total ? [] : [{ ...usageFixture.models[0], model_name: narrow ? 'remaining-model' : `group-${offset}` }], total, offset, limit: 25 });
+    }),
+  );
+  const data = { ...usageFixture, models: [], sessions: [], paging: true, data_version: 1 };
+  const view = render(<UsageExplorer data={data} />);
+  await screen.findByRole('button', { name: /View sessions for gpt-test / });
+  await userEvent.setup().click(screen.getByRole('button', { name: /^Sessions / }));
+  const toggle = await screen.findByRole('button', { name: /Show model breakdown for session/ });
+  await userEvent.setup().click(toggle);
+  await screen.findByText('group-0');
+  await userEvent.setup().click(await screen.findByRole('button', { name: 'Next models' }));
+  await screen.findByText('group-25');
+  view.rerender(<UsageExplorer data={data} period="day" selectedDay="2026-09-29" />);
+  await userEvent.setup().click(await screen.findByRole('button', { name: /Show model breakdown for session/ }));
+  await screen.findByText('remaining-model');
+  expect(offsets.at(-1)).toBe(0);
+  view.rerender(<UsageExplorer data={data} />);
+  await userEvent.setup().click(await screen.findByRole('button', { name: /Show model breakdown for session/ }));
+  await screen.findByText('group-0');
+  await userEvent.setup().click(await screen.findByRole('button', { name: 'Next models' }));
+  await screen.findByText('group-25');
+  reduced = true;
+  view.rerender(<UsageExplorer data={{ ...data, data_version: 2 }} />);
+  await screen.findByText('remaining-model');
+  expect(offsets.at(-1)).toBe(0);
+});
+
+it('labels actual model groups including the same name on different providers and unknown models', async () => {
+  server.use(
+    http.get('/api/v1/usage/models', () => HttpResponse.json({ items: [usageFixture.models[0], { ...usageFixture.models[0], provider: 'claude_code' }, { ...usageFixture.models[0], model_name: null }], total: 3, offset: 0, limit: 25 })),
+    http.get('/api/v1/usage/sessions', () => HttpResponse.json({ items: usageFixture.sessions, total: 1, offset: 0, limit: 25 })),
+  );
+  render(<UsageExplorer data={{ ...usageFixture, models: [], sessions: [], paging: true, providers: [usageFixture.providers[0], { ...usageFixture.providers[0], provider: 'claude_code' }], unknown_model_events: { codex: 1 } }} />);
+  await screen.findByRole('button', { name: 'View sessions for Model not recorded in Codex' });
+  expect(screen.getByRole('button', { name: 'Models 3 groups' })).toBeInTheDocument();
+  await userEvent.setup().click(screen.getByRole('button', { name: /^Sessions / }));
+  await screen.findByRole('button', { name: /Show model breakdown for session/ });
+  expect(screen.getByRole('button', { name: 'Models 3 groups' })).toBeInTheDocument();
+});
