@@ -80,7 +80,8 @@ def smoke_install(path: Path) -> None:
 
         home = root / "home"
         home.mkdir()
-        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+        # Exercise the packaged tzdata fallback used by Windows, even on Unix.
+        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "PYTHONTZPATH": ""}
         port = _free_port()
         url = f"http://127.0.0.1:{port}/"
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -103,6 +104,13 @@ def smoke_install(path: Path) -> None:
                 assert response.status == 200 and response.read(), "compiled asset is empty"
             with opener.open(url + "api/v1/status", timeout=3) as response:
                 assert json.load(response) == {"status": "ok"}
+            query = "api/v1/usage/trends?time_zone=Asia%2FKolkata&from=2026-09-27T18:30:00Z&to=2026-09-28T18:30:00Z&granularity=week"
+            with opener.open(url + query, timeout=3) as response:
+                trends = json.load(response)
+            assert trends["period"]["time_zone"] == "Asia/Kolkata"
+            assert trends["current"]["event_count"] == trends["previous"]["event_count"] == 0
+            assert len(trends["buckets"]) == 1
+            assert trends["comparison"]["workload_tokens"]["percent_change"] is None
             database = home / ".tokenhub" / "tokenhub.sqlite3"
             with closing(sqlite3.connect(database)) as connection:
                 revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()

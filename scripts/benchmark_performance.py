@@ -174,6 +174,21 @@ def benchmark(count: int, provider: str) -> dict[str, Any]:
             assert summary.status_code == page.status_code == 200
             assert summary.json()['totals']['event_count'] == imported == count, (summary.json(), imported, count, len(found))
             assert len(page.json()['items']) <= 25
+            trend_query = {'from': '2026-09-01T00:00:00Z', 'to': '2026-10-01T00:00:00Z', 'dimension': 'models'}
+            before = time.perf_counter()
+            trends = client.get('/api/v1/usage/trends', params=trend_query)
+            first_trends = time.perf_counter() - before
+            assert trends.status_code == 200
+            trend_data = trends.json()
+            assert trend_data['current']['event_count'] == imported
+            assert trend_data['current']['workload_tokens'] == summary.json()['totals']['workload_tokens']
+            assert sum(bucket['current']['workload_tokens'] or 0 for bucket in trend_data['buckets']) == trend_data['current']['workload_tokens']
+            assert len(trend_data['breakdown']['items']) <= 25
+            trend_cached = []
+            for _ in range(5):
+                before = time.perf_counter()
+                assert client.get('/api/v1/usage/trends', params=trend_query).status_code == 200
+                trend_cached.append(time.perf_counter() - before)
             return {'events': count, 'provider': provider, 'source_files': len(found),
                 'discovery_and_approval_seconds': discovery_seconds, 'import_seconds': import_seconds,
                 **{f'{key}_seconds': value for key, value in import_phases.items()}, 'import_sql': import_sql,
@@ -182,6 +197,10 @@ def benchmark(count: int, provider: str) -> dict[str, Any]:
                 'first_summary_seconds': first_summary, 'first_session_page_seconds': first_page,
                 'cached_summary_and_page_median_seconds': statistics.median(cached),
                 'summary_and_page_bytes': len(summary.content) + len(page.content),
+                'first_trends_seconds': first_trends,
+                'cached_trends_median_seconds': statistics.median(trend_cached),
+                'trends_bytes': len(trends.content), 'trend_buckets': len(trend_data['buckets']),
+                'trend_page_rows': len(trend_data['breakdown']['items']), 'trend_model_groups': trend_data['breakdown']['total'],
                 'rss_mb': psutil.Process().memory_info().rss / 1024**2}
 
 

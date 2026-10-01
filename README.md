@@ -172,6 +172,29 @@ reasoning tokens. Search for a model, select it to see its sessions, and expand
 a session to compare the models used inside it. Exact counts are available on
 hover. Source health and import quality appear together under **Local sources**.
 
+**Usage trends** shares the explorer's date, agent, and selected-model filters.
+Switch between daily totals and Monday-based weeks, and select total, input,
+output, cache, or reasoning tokens. Hover or focus a chart bar for exact counts,
+or open **View chart data**. **Compare agents** and **Compare models** show the
+same recorded counters by group; model comparisons use pages of 25 and include
+models used only in the previous period and models with missing names.
+
+Finite date ranges compare with the immediately preceding period of the same
+number of local calendar days. Weeks at either edge are clipped to the selected
+dates; each previous chart interval is shifted back by that calendar-day count.
+All-time totals have no previous-period baseline. Comparisons for missing or
+incomplete counters, and percentages against zero usage, are shown as unavailable.
+Ranges including today are marked as still in progress. Higher/lower usage is
+descriptive, not a claim of better/worse efficiency.
+
+`GET /api/v1/usage/trends` accepts `from`, `to`, `time_zone` (an IANA zone, default
+UTC), `granularity=day|week`, `provider`, `model` or `unknown_model=true`, and
+`dimension=providers|models` with bounded `offset`/`limit`. Date bounds must
+include both local calendar-day boundaries. The same globally canonical delta
+events drive period totals, buckets and group comparisons. Daily/weekly charts
+are limited to 366/260 points; longer histories keep exact totals and request a
+shorter date range. Cached responses refresh when imported data changes.
+
 `GET /api/v1/usage` returns canonical totals plus agent, model, and session
 breakdowns. Session identifiers are opaque, stable hashes; original session IDs
 and source paths are not exposed. The same Claude message deduplication is used
@@ -232,5 +255,8 @@ at a real provider path or opens a real credential store is a bug.
 - **Model attribution depends on recorded metadata.** Missing model names appear
   in “Model not recorded”. Hermes exposes session totals with a reported model;
   model switches within that session cannot be split by its current counters.
-- **No trend chart.** Date filters use observed usage timestamps. TokenHub does
-  not guess daily allocations for counters that lack event dates.
+- **Recorded-date trends.** Charts use stored observation timestamps. Session
+  totals, including Hermes, appear on the reported session end/start date;
+  TokenHub does not estimate how a session's tokens were used across days.
+  Distinct session/model counts cannot be added across buckets because the same
+  session/model may occur on multiple dates. Token and event sums do reconcile.

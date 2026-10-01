@@ -1,0 +1,22 @@
+[
+  {
+    "events": 10000,
+    "providers": 5,
+    "calendar_days": 30,
+    "model_page_rows": 25,
+    "model_groups": 80,
+    "payload_bytes": 67767,
+    "uncached_seconds": 0.2297,
+    "cached_median_seconds": 0.001
+  },
+  {
+    "events": 50000,
+    "providers": 5,
+    "calendar_days": 30,
+    "model_page_rows": 25,
+    "model_groups": 80,
+    "payload_bytes": 68000,
+    "uncached_seconds": 1.0031,
+    "cached_median_seconds": 0.001
+  }
+]

@@ -142,3 +142,25 @@ def test_previous_only_models_remain_paged_with_provider_identity(app_services):
     assert len(second["breakdown"]["items"]) == 5
     assert first["breakdown"]["items"][0]["current"]["event_count"] == 0
     assert first["breakdown"]["items"][0]["comparison"]["workload_tokens"]["percent_change"] == -100
+
+
+def test_fall_dst_days_and_midnight_gap_zones_reconcile(app_services):
+    seed(app_services, [replace(event("a", str(i), "m", str(i)), timestamp=stamp(value)) for i, value in enumerate([
+        "2026-11-01T05:30Z", "2026-11-01T06:30Z", "2026-11-02T04:30Z", "2026-11-02T05:00Z",
+    ])])
+    result = app_services.analytics.usage_trends(start=stamp("2026-11-01T04:00Z"), end=stamp("2026-11-02T05:00Z"), time_zone="America/New_York")
+    assert result["period"]["days"] == 1
+    assert result["current"]["workload_tokens"] == result["buckets"][0]["current"]["workload_tokens"] == 375
+    # Santiago's first local instant on this spring transition date is 01:00.
+    seed(app_services, [replace(event("a", "santiago", "m", "santiago"), timestamp=stamp("2026-09-06T04:30Z"))])
+    santiago = app_services.analytics.usage_trends(start=stamp("2026-09-06T04:00Z"), end=stamp("2026-09-07T03:00Z"), time_zone="America/Santiago")
+    assert santiago["current"]["workload_tokens"] == santiago["buckets"][0]["current"]["workload_tokens"] == 125
+
+
+def test_same_named_models_in_different_providers_remain_separate(app_services):
+    seed(app_services, [event("a", "claude", "same-name", "one"), replace(event("a", "codex", "same-name", "two"), connector_id="codex-local", provider=Provider.CODEX)])
+    result = app_services.analytics.usage_trends(dimension="models")
+    assert result["current"]["model_count"] == 1
+    assert result["breakdown"]["total"] == 2
+    assert {row["provider"] for row in result["breakdown"]["items"]} == {"codex", "claude_code"}
+    assert sum(row["current"]["workload_tokens"] for row in result["breakdown"]["items"]) == 250

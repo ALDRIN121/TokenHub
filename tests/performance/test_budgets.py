@@ -38,3 +38,38 @@ def test_large_history_keeps_pages_and_idle_queries_bounded(tmp_path):
             assert len(selects) < 15  # Cursors are fetched together, regardless of file count.
         finally:
             event.remove(engine, 'before_cursor_execute', observe)
+
+
+def test_trend_views_keep_sql_payload_and_cached_reads_bounded(tmp_path):
+    context = create_workload(tmp_path, 10000)
+    app = create_app(TokenHubSettings(home_directory=context.home, data_directory=tmp_path / 'data', scan_interval_seconds=3600))
+    app.state.container.discovery_context = context
+    with TestClient(app, base_url='http://127.0.0.1:7432') as client:
+        app.state.container.collect()
+        client.post('/api/v1/collection/codex/enable', headers=ORIGIN)
+        statements = []
+        engine = app.state.container.services.session.get_bind()
+        def observe(_connection, _cursor, statement, *_args):
+            if statement.lstrip().upper().startswith(('SELECT', 'WITH')):
+                statements.append(statement)
+        event.listen(engine, 'before_cursor_execute', observe)
+        try:
+            params = {'from': '2026-09-01T00:00:00Z', 'to': '2026-10-01T00:00:00Z', 'dimension': 'models'}
+            response = client.get('/api/v1/usage/trends', params=params)
+            assert response.status_code == 200
+            data = response.json()
+            assert data['current']['event_count'] == 10000
+            assert len(data['buckets']) == 30
+            assert len(data['breakdown']['items']) <= 25
+            assert len(response.content) < 200000
+            assert len(statements) <= 7
+            statements.clear()
+            for _ in range(3):
+                assert client.get('/api/v1/usage/trends', params=params).json() == data
+            assert statements == []
+            app.state.container.collect()
+            statements.clear()
+            client.get('/api/v1/usage/trends', params=params)
+            assert statements == []  # Idle scans do not invalidate unchanged trends.
+        finally:
+            event.remove(engine, 'before_cursor_execute', observe)
