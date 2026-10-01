@@ -139,3 +139,55 @@ it('recovers comparison pagination when a rebuild removes later model groups', a
   await within(panel).findByText('remaining-comparison');
   expect(offsets.at(-1)).toBe(0);
 });
+
+it('compares an empty selected date with previous usage without asking for a first import', async () => {
+  const empty = { ...trendFixture.current, event_count: 0, session_count: 0, model_count: 0,
+    incomplete_event_count: 0, workload_tokens: null, input_total_tokens: null, output_total_tokens: null,
+    cache_read_tokens: null, cache_write_tokens: null, reasoning_tokens: null,
+    reported_counts: { workload_tokens: 0, input_total_tokens: 0, output_total_tokens: 0,
+      cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0 } };
+  const comparison = { ...trendFixture.comparison, workload_tokens: { difference: -100, percent_change: -100, state: 'compared' } };
+  server.use(http.get('/api/v1/usage/trends', () => HttpResponse.json({ ...trendFixture, current: empty, comparison,
+    buckets: trendFixture.buckets.map((bucket) => ({ ...bucket, current: empty })),
+    breakdown: { ...trendFixture.breakdown, items: [{ ...trendFixture.breakdown.items[0], current: empty, comparison }] } })));
+  const data = { ...usageFixture, totals: empty, providers: [], models: [], sessions: [] };
+  const view = render(<UsageExplorer data={data} period="day" selectedDay="2026-09-27" />);
+  const panel = await screen.findByRole('region', { name: 'Usage trends' });
+  expect(await within(panel).findByLabelText('Current period total')).toHaveTextContent('No records');
+  expect(within(panel).getByLabelText('Previous period total')).toHaveTextContent('100');
+  expect(within(panel).getByLabelText('Period change')).toHaveTextContent('100.0% less');
+  expect(within(panel).getByRole('table', { name: 'Agent period comparison' })).toHaveTextContent('Codex');
+  expect(screen.getByText('No usage recorded for this date range')).toBeInTheDocument();
+  expect(screen.queryByText('Your usage explorer starts with an import')).not.toBeInTheDocument();
+  view.rerender(<UsageExplorer data={data} period="all" />);
+  expect(screen.getByText('Your usage explorer starts with an import')).toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: 'Usage trends' })).not.toBeInTheDocument();
+});
+
+it('retries a failed comparison page before allowing navigation to skip its groups', async () => {
+  const offsets: number[] = [];
+  let failPage = true;
+  server.use(http.get('/api/v1/usage/trends', ({ request }) => {
+    const options = new URL(request.url).searchParams;
+    if (options.get('dimension') !== 'models') return HttpResponse.json(trendFixture);
+    const offset = Number(options.get('offset') ?? 0);
+    offsets.push(offset);
+    if (offset === 25 && failPage) return HttpResponse.json({}, { status: 500 });
+    return HttpResponse.json({ ...trendFixture, breakdown: { ...trendFixture.breakdown, dimension: 'models', total: 75, offset,
+      items: Array.from({ length: 25 }, (_, index) => ({ ...trendFixture.breakdown.items[0], model_name: `comparison-${offset + index}` })) } });
+  }));
+  render(<UsageExplorer data={usageFixture} period="day" selectedDay="2026-09-27" />);
+  const panel = await screen.findByRole('region', { name: 'Usage trends' });
+  await userEvent.setup().click(await within(panel).findByRole('button', { name: 'Compare models' }));
+  await within(panel).findByText('comparison-0');
+  await userEvent.setup().click(within(panel).getByRole('button', { name: 'Next comparisons' }));
+  await within(panel).findByRole('alert');
+  expect(within(panel).getByText(/Showing 1–25 of 75/)).toBeInTheDocument();
+  expect(within(panel).getByRole('button', { name: 'Next comparisons' })).toBeDisabled();
+  failPage = false;
+  await userEvent.setup().click(within(panel).getByRole('button', { name: 'Retry trends' }));
+  await within(panel).findByText('comparison-25');
+  await userEvent.setup().click(within(panel).getByRole('button', { name: 'Next comparisons' }));
+  await within(panel).findByText('comparison-50');
+  expect(offsets).toEqual([0, 25, 25, 50]);
+});
