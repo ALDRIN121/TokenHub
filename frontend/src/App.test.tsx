@@ -519,6 +519,7 @@ it('does not reload provider discovery or quality for date-only changes', async 
     await userEvent.setup().selectOptions(screen.getByRole('combobox', { name: 'Date range' }), 'today');
     await waitFor(() => expect(fetches.mock.calls.length).toBeGreaterThan(before));
     const paths = fetches.mock.calls.slice(before).map(([input]) => String(input instanceof Request ? input.url : input));
-    expect(paths.every((path) => path.includes('/usage?'))).toBe(true);
+    expect(paths.every((path) => new URL(path, window.location.origin).pathname.startsWith('/api/v1/usage'))).toBe(true);
+    expect(paths.some((path) => path.includes('/usage/trends?'))).toBe(true);
   } finally { view.unmount(); fetches.mockRestore(); }
 });

@@ -12,6 +12,7 @@ import type {
   ImportOutcome,
   RebuildOutcome,
   UsageBreakdown,
+  UsageTrendsResponse,
 } from '../types';
 
 /**
@@ -99,4 +100,8 @@ export function getUsagePage(mode: 'models' | 'sessions', options: Record<string
 
 export function getSessionModels(key: string, options: Record<string, string>, signal?: AbortSignal): Promise<UsagePage<ModelUsage>> {
   return request(`/usage/sessions/${encodeURIComponent(key)}/models?${new URLSearchParams({ ...options, limit: '25' })}`, { signal });
+}
+
+export function getUsageTrends(options: Record<string, string>, signal?: AbortSignal): Promise<UsageTrendsResponse> {
+  return request(`/usage/trends?${new URLSearchParams({ ...options, limit: '25' })}`, { signal });
 }

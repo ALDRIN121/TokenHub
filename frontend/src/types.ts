@@ -160,3 +160,28 @@ export interface UsageBreakdown {
   unknown_model_events?: Record<string, number>;
   data_version?: number;
 }
+
+export type TrendMetric = 'workload_tokens' | 'input_total_tokens' | 'output_total_tokens' | 'cache_read_tokens' | 'cache_write_tokens' | 'reasoning_tokens';
+export interface TrendTotals extends UsageTotals { reported_counts: Record<TrendMetric, number> }
+export interface TrendChange {
+  difference: number | null;
+  percent_change: number | null;
+  state: 'compared' | 'no_baseline' | 'incomplete' | 'all_time';
+}
+export interface TrendBucket {
+  from: string; to: string;
+  previous_from: string | null; previous_to: string | null;
+  current: TrendTotals; previous: TrendTotals | null;
+}
+export interface UsageTrendsResponse {
+  period: { from: string | null; to: string | null; previous_from: string | null; previous_to: string | null;
+    days: number; time_zone: string; granularity: 'day' | 'week'; all_time: boolean; includes_today: boolean };
+  current: TrendTotals; previous: TrendTotals | null;
+  comparison: Record<TrendMetric, TrendChange>;
+  buckets: TrendBucket[];
+  series_limited: boolean;
+  breakdown: { dimension: 'providers' | 'models'; items: { provider: string; model_name: string | null;
+    current: TrendTotals; previous: TrendTotals | null; comparison: Record<TrendMetric, TrendChange> }[];
+    total: number; offset: number; limit: number };
+  data_version: number;
+}

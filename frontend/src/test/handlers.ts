@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw';
+import { trendFixture } from './trendFixtures';
 
 import {
   dashboardFixture,
@@ -37,6 +38,11 @@ export const handlers = [
   }),
   http.get('/api/v1/discovery', () => HttpResponse.json(discoveryFixture)),
   http.get('/api/v1/usage', () => HttpResponse.json(usageFixture)),
+  http.get('/api/v1/usage/trends', ({ request }) => {
+    const allTime = !new URL(request.url).searchParams.has('from');
+    return HttpResponse.json({ ...trendFixture, previous: allTime ? null : trendFixture.previous,
+      period: { ...trendFixture.period, all_time: allTime } });
+  }),
   http.get('/api/v1/dashboard', () => HttpResponse.json(dashboardFixture)),
   http.get('/api/v1/data-quality', () => HttpResponse.json(dataQualityFixture)),
 

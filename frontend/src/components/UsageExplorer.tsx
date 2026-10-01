@@ -1,20 +1,13 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { ModelUsage, SessionUsage, UsageBreakdown, UsageTotals } from '../types';
 import { formatMetric, MetricCard } from './MetricCard';
-import { Icon, type IconName } from './Icon';
+import { Icon } from './Icon';
 import { usageDateRange, type UsagePeriod } from '../dateRange';
 import { getUsagePage, getSessionModels } from '../api/client';
 import { UsageComposition } from './UsageComposition';
+import { UsageTrends } from './UsageTrends';
+import { agents, agentName, modelName } from './usageLabels';
 
-const agents: { id: string; name: string; icon: IconName }[] = [
-  { id: 'codex', name: 'Codex', icon: 'terminal' },
-  { id: 'claude_code', name: 'Claude Code', icon: 'sparkle' },
-  { id: 'hermes', name: 'Hermes Agent', icon: 'hermes' },
-  { id: 'vscode_copilot', name: 'VS Code Copilot', icon: 'copilot' },
-  { id: 'antigravity', name: 'Antigravity', icon: 'sparkle' },
-];
-const agentName = (id: string) => agents.find((agent) => agent.id === id)?.name ?? id;
-const modelName = (name: string | null) => name ?? 'Model not recorded';
 const percent = (value: number | null, total: number | null) => value === null || total === null || total === 0 ? '—' : `${(value / total * 100).toFixed(1)}%`;
 const full = (value: number | null) => value === null ? 'Not reported' : value.toLocaleString('en-US');
 const date = (value: string | null) => value ? new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value)) : 'Not reported';
@@ -202,6 +195,8 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
     </dl>
     <div className="overview-details"><UsageComposition dashboard={visibleSummary ?? { ...data.totals, workload_tokens: null, input_total_tokens: null, output_total_tokens: null, event_count: 0 }} /><aside className="privacy-card" id="privacy-note"><span className="privacy-card__icon"><Icon name="shield" /></span><h3>Your data stays yours.</h3><p>TokenHub parses approved local usage sources and retains only usage metadata. Prompts, transcripts, credentials, and provider accounts are never stored or sent anywhere.</p><span><Icon name="check" />No data leaves this machine</span></aside></div>
     {data.totals.event_count === 0 ? <div className="explorer-empty"><Icon name="sources" /><h3>Your usage explorer starts with an import</h3><p>Connect an agent’s local sources to see models and sessions here.</p><a className="button button--primary" href="#local-sources">Connect local sources<Icon name="arrow" /></a></div> : <>
+      <UsageTrends range={usageDateRange(period, selectedDay)} provider={selected?.provider ?? (provider === 'all' ? undefined : provider)}
+        model={selected?.model_name ?? undefined} unknownModel={selected?.model_name === null} version={data.data_version} />
       <div className="ledger-toolbar">
         {selected ? <div className="model-breadcrumb"><button type="button" onClick={showModels}><Icon name="arrow" />All models</button><span>/</span><h3>{modelName(selected.model_name)}</h3><span className={`agent-label agent-color--${selected.provider}`}>{agentName(selected.provider)}</span></div> : <div className="ledger-tabs" aria-label="Usage grouping"><button type="button" aria-pressed={mode === 'models'} onClick={showModels}>Models <span>{modelGroups} groups</span></button><button type="button" aria-pressed={mode === 'sessions'} onClick={() => { switchMode('sessions'); setQuery(''); }}>Sessions <span>{summary?.session_count ?? 0}</span></button></div>}
         <div className="ledger-controls"><label className="usage-search"><Icon name="search" /><input type="search" aria-label="Search usage" placeholder={mode === 'models' ? 'Find a model…' : 'Find a session or model…'} value={query} onChange={(event) => { setQuery(event.target.value); setLimit(25); }} /></label><label className="usage-sort">Sort by<select value={sort} onChange={(event) => changeSort(event.target.value as SortKey, false)}>{sortLabels.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button type="button" className="sort-direction" aria-label={`Sort ${direction === 'ascending' ? 'descending' : 'ascending'}`} title={`Sorted ${direction}; click to reverse`} onClick={() => changeSort(sort)}><SortIndicator active direction={direction} /></button></div>
