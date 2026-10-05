@@ -51,14 +51,14 @@ def test_usage_groups_deduplicate_claude_history_and_keep_unknowns(app_services:
     assert "copied-history" not in str(result)
 
 
-def test_rescan_backfills_metadata_without_changing_counts(app_services: Services) -> None:
+def test_rescan_reconciles_revised_counters_and_backfills_metadata(app_services: Services) -> None:
     usage = app_services.usage_repository
     cursor = SyncCursor("a", 0, None, "test")
     original = event("a", "one", None, "session")
     usage.persist_scan([original], cursor)
     outcome = usage.persist_scan([replace(original, model_name="new-model", input_total_tokens=999)], cursor)
     assert outcome.inserted_events == 0
-    assert usage.dashboard_totals().workload_tokens == 125
+    assert usage.dashboard_totals().workload_tokens == 1024
     assert app_services.analytics.usage_breakdown()["models"][0]["model_name"] == "new-model"
 
 

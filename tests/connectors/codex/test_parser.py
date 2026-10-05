@@ -153,7 +153,7 @@ def test_parser_accepts_clean_raw_string_paths() -> None:
 
     result = parse_codex_jsonl(source, start_offset=0)
 
-    assert [event.record_identity for event in result.events] == ["1"]
+    assert [event.record_identity for event in result.events] == ["ordinal:1"]
     assert isinstance(source.canonical_path, Path)
     assert isinstance(source.approved_root, Path)
 
@@ -179,7 +179,7 @@ def test_parser_stops_before_partial_final_line() -> None:
 
     result = parse_codex_jsonl(source, start_offset=0)
 
-    assert [event.record_identity for event in result.events] == ["1"]
+    assert [event.record_identity for event in result.events] == ["ordinal:1"]
     assert result.partial_final_record is True
     assert result.safe_byte_offset < source.canonical_path.stat().st_size
 
@@ -196,7 +196,7 @@ def test_parser_keeps_duplicate_ordinals_for_persistence_deduplication() -> None
     """Fails if parsing drops records before the source-and-ordinal uniqueness boundary."""
     result = parse_codex_jsonl(synthetic_source("duplicate.jsonl"), start_offset=0)
 
-    assert [event.record_identity for event in result.events] == ["1", "1"]
+    assert [event.record_identity for event in result.events] == ["ordinal:1", "ordinal:1"]
     assert result.events[1].source_id == "codex-local:fixture-fingerprint"
 
 
@@ -209,7 +209,7 @@ def test_parser_leaves_missing_breakdowns_unknown() -> None:
     assert event.cache_write_tokens is None
     assert event.reasoning_tokens is None
     assert event.quality is Quality.EXACT
-    assert event.parser_version == "codex-jsonl-v5"
+    assert event.parser_version == "codex-jsonl-v6"
 
 
 def test_parser_starts_at_the_provided_completed_line_offset() -> None:
@@ -219,7 +219,7 @@ def test_parser_starts_at_the_provided_completed_line_offset() -> None:
 
     result = parse_codex_jsonl(source, start_offset=first_line_size)
 
-    assert [event.record_identity for event in result.events] == ["1"]
+    assert [event.record_identity for event in result.events] == ["ordinal:1"]
     assert result.events[0].input_total_tokens == 10
     assert result.safe_byte_offset == source.canonical_path.stat().st_size
 
@@ -245,7 +245,7 @@ def test_parser_keeps_valid_records_when_later_token_value_is_invalid(tmp_path: 
 
     result = parse_codex_jsonl(source, start_offset=0)
 
-    assert [event.record_identity for event in result.events] == ["1"]
+    assert [event.record_identity for event in result.events] == ["ordinal:1"]
     assert result.unsupported_records == 1
     assert result.safe_byte_offset == path.stat().st_size
 
@@ -271,7 +271,7 @@ def test_parser_rejects_explicit_null_token_values(tmp_path: Path) -> None:
 
     result = parse_codex_jsonl(source, start_offset=0)
 
-    assert [event.record_identity for event in result.events] == ["1"]
+    assert [event.record_identity for event in result.events] == ["ordinal:1"]
     assert result.unsupported_records == 1
 
 
@@ -400,7 +400,7 @@ def test_parser_skips_timestamp_that_overflows_during_utc_conversion(tmp_path: P
 
     result = parse_codex_jsonl(source, start_offset=0)
 
-    assert [event.record_identity for event in result.events] == ["1"]
+    assert [event.record_identity for event in result.events] == ["ordinal:1"]
     assert result.unsupported_records == 1
 
 

@@ -38,11 +38,11 @@ class IngestionService:
         self.usage_repository = usage_repository
         self.registry = registry
 
-    def approve(self, source_id: str) -> SourceRecord:
+    def approve(self, source_id: str, *, renew: bool = False) -> SourceRecord:
         source = self._source(source_id)
         self._supported_connector(source)
         # The repository validates containment and writes paths in its approval transaction.
-        return self.source_repository.approve(source_id)
+        return self.source_repository.approve(source_id, renew=renew)
 
     def rescan(self, source_id: str, *, record_unchanged: bool = True, rebuild: bool = False) -> ImportOutcome:
         source = self._source(source_id)
@@ -89,6 +89,7 @@ class IngestionService:
             partial_final_record=result.partial_final_record,
             unsupported_records=result.unsupported_records,
             replace_events=rebuild or result.replace_events,
+            record_identity_aliases=result.record_identity_aliases,
             record_import=(
                 record_unchanged or result.cursor != cursor
                 or result.state.value != source.state

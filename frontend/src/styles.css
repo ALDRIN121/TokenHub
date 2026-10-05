@@ -72,6 +72,9 @@ h1, h2, h3, p { margin: 0; }
 .notice { display: flex; align-items: flex-start; gap: 10px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 8px; margin: 0 0 24px; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .notice .icon { margin-top: 1px; }
 .notice--error { color: var(--error); background: var(--error-soft); border-color: var(--error); }
+.notice--warning { color: var(--warning); background: var(--warning-soft); border-color: var(--warning); }
+.usage-accuracy p { margin: 0; }
+.usage-accuracy p + p { margin-top: 4px; }
 .notice--success { color: var(--accent); background: var(--accent-soft); }
 .panel { margin-bottom: 30px; scroll-margin-top: 24px; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 17px; }

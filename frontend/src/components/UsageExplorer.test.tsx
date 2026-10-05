@@ -140,3 +140,25 @@ it('sorts session contributions for a selected model rather than the whole sessi
   await user.click(within(names).getByRole('button'));
   expect(names).toHaveAttribute('aria-sort', 'ascending');
 });
+
+it('explains Hermes date attribution beside totals and follows the selected agent and model', async () => {
+  const user = userEvent.setup();
+  const hermesData = { ...data, providers: [...data.providers, { ...usageFixture.totals, provider: 'hermes' }] };
+  render(<UsageExplorer data={hermesData} />);
+  const note = screen.getByRole('note', { name: 'Hermes session attribution' });
+  expect(note).toHaveTextContent(/entire session.*end date.*start date.*active/i);
+  expect(note).toHaveTextContent(/daily.*weekly.*model.*per-request precision/i);
+  expect(note.closest('section')).toHaveAttribute('id', 'usage-explorer');
+  expect(note.compareDocumentPosition(screen.getByText('Workload tokens')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await user.click(screen.getByRole('button', { name: 'View sessions for gpt-test in Codex' }));
+  expect(screen.queryByRole('note', { name: 'Hermes session attribution' })).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Filter by Hermes Agent' }));
+  expect(screen.getByRole('note', { name: 'Hermes session attribution' })).toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Filter by Codex' }));
+  expect(screen.queryByRole('note', { name: 'Hermes session attribution' })).not.toBeInTheDocument();
+});
+
+it('does not show a Hermes attribution caveat when Hermes has no recorded events', () => {
+  render(<UsageExplorer data={{ ...usageFixture, providers: [...usageFixture.providers, { ...usageFixture.totals, provider: 'hermes', event_count: 0 }] }} />);
+  expect(screen.queryByRole('note', { name: 'Hermes session attribution' })).not.toBeInTheDocument();
+});

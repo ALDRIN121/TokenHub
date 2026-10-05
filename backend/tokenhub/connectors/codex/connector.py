@@ -59,18 +59,23 @@ class CodexConnector:
     @memoized_sources
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
         root = find_root(context, "CODEX_HOME", ".codex", marker="sessions", canonicalize=False)
-        sessions = root / "sessions"
-        # These checks cheaply classify stable missing/symlink roots. The
-        # descriptor anchor below remains the authority if the path changes.
-        if root.is_symlink() or not sessions.is_dir() or sessions.is_symlink():
+        if root.is_symlink():
             return []
-        with anchor_directory(sessions) as approved_root:
-            return self._discover_anchored_sources(
-                approved_root.path,
-                approved_root.descriptor,
-                approved_root.device,
-                approved_root.inode,
-            )
+        candidates: list[SourceDescriptor] = []
+        # Keep each allowlisted usage folder independently pinned. An existing
+        # sessions grant cannot authorize its archived_sessions sibling.
+        for folder in ("sessions", "archived_sessions"):
+            sessions = root / folder
+            if not sessions.is_dir() or sessions.is_symlink():
+                continue
+            with anchor_directory(sessions) as approved_root:
+                candidates.extend(self._discover_anchored_sources(
+                    approved_root.path,
+                    approved_root.descriptor,
+                    approved_root.device,
+                    approved_root.inode,
+                ))
+        return candidates
 
     def _discover_anchored_sources(
         self,
@@ -203,6 +208,13 @@ class CodexConnector:
             ),
             partial_final_record=parsed.partial_final_record,
             unsupported_records=parsed.unsupported_records,
+            # Replace only recovered ordinal aliases. History no longer in
+            # the file remains observed history after a parser upgrade.
+            record_identity_aliases=(
+                parsed.record_identity_aliases
+                if cursor is not None and cursor.parser_version != PARSER_VERSION
+                else ()
+            ),
         )
 
     def capabilities(self) -> ConnectorCapabilities:

@@ -59,8 +59,9 @@ function TokenHeaders({ mode, sort, direction, onSort }: {
   })}</tr>;
 }
 
-export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriodChange, onSelectedDayChange }: {
+export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriodChange, onSelectedDayChange, accuracyNotice }: {
   data: UsageBreakdown;
+  accuracyNotice?: { messages: string[]; warning: boolean };
   period?: UsagePeriod;
   selectedDay?: string;
   onPeriodChange?: (period: UsagePeriod) => void;
@@ -140,6 +141,9 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
     return (sort === 'model_count' ? compare(a.row, b.row) : compare(a.metrics, b.metrics)) || names;
   }), [remote, page, mode, data.sessions, provider, selected, search, sort, direction]);
   const visibleSummary = selected ? selectedModel : summary;
+  const selectedAgent = selected?.provider ?? provider;
+  const hasHermesUsage = (selectedAgent === 'all' || selectedAgent === 'hermes') &&
+    [...data.providers, ...data.models, ...data.sessions].some((row) => row.provider === 'hermes' && row.event_count > 0);
   const largest = models.reduce((value, row) => Math.max(value, row.workload_tokens ?? 0), 0);
   const unknownModels = remote ? Object.entries(data.unknown_model_events ?? {}).filter(([id]) => provider === 'all' || provider === id).reduce((total, [, value]) => total + value, 0) : data.models.filter((row) => row.model_name === null && (provider === 'all' || row.provider === provider)).reduce((count, row) => count + row.event_count, 0);
 
@@ -184,6 +188,8 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
       })}
     </div>
     <div className="section-heading"><h3>Token summary</h3><span className="section-meta">Selected date and agent</span></div>
+    {accuracyNotice ? <div className={`usage-accuracy notice${accuracyNotice.warning ? ' notice--warning' : ''}`} role="note" aria-label="Usage freshness and completeness"><Icon name="info" /><div>{accuracyNotice.messages.map((message) => <p key={message}>{message}</p>)}</div></div> : null}
+    {hasHermesUsage ? <p className="notice notice--warning" role="note" aria-label="Hermes session attribution"><Icon name="hermes" /><span>Hermes assigns the entire session’s usage to its end date, or its start date while active. Daily and weekly totals and the session-reported model lack per-request precision; usage across days and model switches cannot be separated.</span></p> : null}
     <dl className="metric-grid">
       <MetricCard label="Workload tokens" value={visibleSummary?.workload_tokens ?? null} icon="layers" note="Complete input + output records" featured />
       <MetricCard label="Input tokens" value={visibleSummary?.input_total_tokens ?? null} icon="input" note="Includes cached input" />
@@ -218,7 +224,7 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
         {(mode === 'models' ? models.length : sessions.length) === 0 ? <div className="ledger-no-results"><h3>{query ? 'No usage matches your search' : 'No imported usage for this agent'}</h3><p>{query ? 'Try another model name or session identifier.' : 'Approve its local sources to start collecting usage.'}</p>{query ? <button type="button" className="button button--secondary" onClick={() => setQuery('')}>Clear search</button> : <a href="#local-sources">View local sources</a>}</div> : null}
       </div>
       {remote ? <div className="ledger-bottom"><span>Showing {page.total ? offset + 1 : 0}–{Math.min(offset + 25, page.total)} of {page.total} {mode}</span><div className="page-controls"><button type="button" className="button button--secondary" disabled={pageLoading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous page</button><button type="button" className="button button--secondary" disabled={pageLoading || offset + 25 >= page.total} onClick={() => { setOffset(offset + 25); setExpanded(null); }}>Next page</button></div></div> : <div className="ledger-bottom"><span>Showing {Math.min(limit, mode === 'models' ? models.length : sessions.length)} of {mode === 'models' ? models.length : sessions.length} {mode}</span>{(mode === 'models' ? models.length : sessions.length) > limit ? <button type="button" className="button button--secondary" onClick={() => setLimit(limit + 25)}>Show 25 more</button> : <span>Hover a count for the exact number.</span>}</div>}
-      <div className="ledger-notes"><p><Icon name="info" /><span>Total = input + output. Cache is included in input; reasoning is included in output. Unknown values appear as —.{visibleSummary?.incomplete_event_count ? ` ${visibleSummary.incomplete_event_count} records have incomplete input or output; totals include complete records only.` : ''}</span></p>{(provider === 'all' || provider === 'hermes') && data.providers.some((row) => row.provider === 'hermes') ? <p><Icon name="hermes" /><span>Hermes reports session totals under one model and the session end date (or start date if still open). Model switches and usage across days cannot be separated from these counters.</span></p> : null}{(provider === 'all' || provider === 'vscode_copilot') && data.providers.some((row) => row.provider === 'vscode_copilot') ? <p><Icon name="copilot" /><span>Copilot Chat totals include only saved requests with token counters. Inline suggestions and requests without counters are not included.</span></p> : null}{(provider === 'all' || provider === 'antigravity') && data.providers.some((row) => row.provider === 'antigravity') ? <p><Icon name="quality" /><span>Antigravity usage comes from saved conversation counters. Unrecognized generations are excluded rather than estimated.</span></p> : null}{unknownModels > 0 ? <p><Icon name="quality" /><span>{unknownModels.toLocaleString('en-US')} records have no recorded model. Their tokens remain in “Model not recorded”.</span></p> : null}</div>
+      <div className="ledger-notes"><p><Icon name="info" /><span>Total = input + output. Cache is included in input; reasoning is included in output. Unknown values appear as —.{visibleSummary?.incomplete_event_count ? ` ${visibleSummary.incomplete_event_count} records have incomplete input or output; totals include complete records only.` : ''}</span></p>{(provider === 'all' || provider === 'vscode_copilot') && data.providers.some((row) => row.provider === 'vscode_copilot') ? <p><Icon name="copilot" /><span>Copilot Chat totals include only saved requests with token counters. Inline suggestions and requests without counters are not included.</span></p> : null}{(provider === 'all' || provider === 'antigravity') && data.providers.some((row) => row.provider === 'antigravity') ? <p><Icon name="quality" /><span>Antigravity usage comes from saved conversation counters. Unrecognized generations are excluded rather than estimated.</span></p> : null}{unknownModels > 0 ? <p><Icon name="quality" /><span>{unknownModels.toLocaleString('en-US')} records have no recorded model. Their tokens remain in “Model not recorded”.</span></p> : null}</div>
     </>}
   </section>;
 }

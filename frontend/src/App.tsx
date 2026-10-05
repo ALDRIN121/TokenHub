@@ -90,6 +90,31 @@ function explainQuality(freshness: SourceFreshness[]): string {
   );
 }
 
+/** Summary guidance covers all sources, including those outside the health page. */
+function usageAccuracyNotice(usage: UsageBreakdown, collection: CollectionStatus | null, quality: DataQualityResponse | null, error: string | null, discovery: DiscoveryResponse | null) {
+  const messages = ['Totals cover imported, observed records. Unrecorded usage is not included.'];
+  const lastScan = collection?.last_scan_at ? Date.parse(collection.last_scan_at) : NaN;
+  const stale = collection !== null && Number.isFinite(lastScan) && Date.now() - lastScan > Math.max(collection.scan_interval_seconds * 3, 60) * 1000;
+  if (stale) messages.push(`Usage may be out of date. Last completed scan: ${formatTimestamp(collection!.last_scan_at)}. Choose Refresh data to check for newer usage.`);
+  else if (Number.isFinite(lastScan)) messages.push(`Last completed scan: ${formatTimestamp(collection!.last_scan_at)}.`);
+  else if (usage.totals.event_count > 0) messages.push('Freshness not confirmed. No completed scan has been reported for the imported usage.');
+
+  const states = new Set([
+    ...Object.entries(quality?.state_counts ?? {}).filter(([, count]) => count > 0).map(([state]) => state),
+    ...(quality?.source_freshness.map((source) => source.state) ?? []),
+  ]);
+  const incomplete = error !== null || (collection?.failed_source_count ?? 0) > 0 ||
+    (discovery?.providers.some((provider) => provider.state === 'error' || provider.evidence_codes.includes('discovery_error')) ?? false) ||
+    (collection?.requires_reapproval_connectors?.length ?? 0) > 0 || usage.totals.incomplete_event_count > 0 ||
+    [...states].some((state) => INCOMPLETE_STATES.has(state) || state === 'discovered') ||
+    Object.entries(quality?.quality_counts ?? {}).some(([state, count]) => count > 0 && (INCOMPLETE_STATES.has(state) || state === 'unavailable')) ||
+    (quality?.source_freshness.some((source) => (source.unsupported_records ?? 0) > 0) ?? false);
+  if (incomplete) messages.push('Some usage may be missing: connected sources may need approval, could not be read fully, or contain incomplete token counts. Totals include only the records and counters that were imported.');
+  if (states.has('source_missing')) messages.push('Previously imported records remain counted even when their original files are no longer available.');
+  if (quality === null) messages.push('Source completeness has not been confirmed.');
+  return { messages, warning: stale || incomplete || !Number.isFinite(lastScan) || quality === null };
+}
+
 const UNSUPPORTED_RECORDS_HINT =
   'TokenHub could not count these records, so their tokens are not in your totals. ' +
   'For example, a session may record only a combined total with no input/output split; TokenHub never guesses one.';
@@ -330,7 +355,7 @@ export default function App() {
           </div>
         ) : null}
 
-        {usage !== null ? <UsageExplorer data={usage} period={period} selectedDay={selectedDay} onPeriodChange={setPeriod} onSelectedDayChange={setSelectedDay} /> : null}
+        {usage !== null ? <UsageExplorer data={usage} accuracyNotice={usageAccuracyNotice(usage, collection, quality, error, discovery)} period={period} selectedDay={selectedDay} onPeriodChange={setPeriod} onSelectedDayChange={setSelectedDay} /> : null}
 
         {discovery !== null ? (
           <section className="panel" id="local-sources" aria-labelledby="local-sources-heading">
@@ -340,7 +365,7 @@ export default function App() {
             </div>
             <div className="provider-grid">
               {providers.map((provider) => (
-                <ProviderCard key={provider.connector_id} provider={provider} actionsDisabled={actionsDisabled} autoImportEnabled={collection?.auto_import_connectors?.includes(provider.connector_id) ?? (provider.provider === 'codex' && collection?.codex_auto_import)} onAutoImportChange={provider.provider ? (enabled) => handleAutoImport(provider, enabled) : undefined} />
+                <ProviderCard key={provider.connector_id} provider={provider} actionsDisabled={actionsDisabled} requiresReapproval={collection?.requires_reapproval_connectors?.includes(provider.connector_id) ?? false} autoImportEnabled={collection?.auto_import_connectors?.includes(provider.connector_id) ?? (provider.provider === 'codex' && collection?.codex_auto_import)} onAutoImportChange={provider.provider ? (enabled) => handleAutoImport(provider, enabled) : undefined} />
               ))}
             </div>
             <p className="source-disclaimer"><Icon name="info" />Codex, Claude Code, Hermes Agent, VS Code Copilot Chat, and Antigravity support local usage imports from approved sources. Copilot inline suggestions are not included.</p>

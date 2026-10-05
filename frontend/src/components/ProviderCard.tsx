@@ -31,11 +31,12 @@ interface ProviderCardProps {
   provider: ProviderSummary;
   actionsDisabled?: boolean;
   autoImportEnabled?: boolean;
+  requiresReapproval?: boolean;
   onAutoImportChange?: (enabled: boolean) => void;
 }
 
 /** One approval per import-capable provider, with a compact source summary. */
-export function ProviderCard({ provider, actionsDisabled = false, autoImportEnabled = false, onAutoImportChange }: ProviderCardProps) {
+export function ProviderCard({ provider, actionsDisabled = false, autoImportEnabled = false, requiresReapproval = false, onAutoImportChange }: ProviderCardProps) {
   const evidence = provider.evidence_codes.map(evidenceLabel);
   const evidenceText = evidence.length > 0 ? evidence.join(', ') : 'none recorded';
   const sourceCount = provider.source_count ?? provider.sources.length;
@@ -62,14 +63,14 @@ export function ProviderCard({ provider, actionsDisabled = false, autoImportEnab
         <span className={`badge ${detectionFailed ? 'badge--warning' : supported ? 'badge--success' : 'badge--neutral'}`}>{stateLabel}</span>
       </div>
       <p className="provider-card__description">
-        {detectionFailed ? 'This installation could not be checked. Choose Refresh data to retry detection.' : supported ? 'Approved session usage updates automatically on this device.' : unreadableFormat ? 'Installation detected. Its saved conversations appear to be encrypted, so TokenHub cannot read them.' : detected ? 'Installation detected. Usage imports are not supported yet.' : 'No installation detected on this machine.'}
+        {detectionFailed ? 'This installation could not be checked. Choose Refresh data to retry detection.' : requiresReapproval ? 'Renew folder permission to resume automatic usage imports.' : supported ? 'Approved session usage updates automatically on this device.' : unreadableFormat ? 'Installation detected. Its saved conversations appear to be encrypted, so TokenHub cannot read them.' : detected ? 'Installation detected. Usage imports are not supported yet.' : 'No installation detected on this machine.'}
       </p>
 
-      {supported && onAutoImportChange ? (
+      {(supported || requiresReapproval) && onAutoImportChange ? (
         <div className="provider-card__automation">
-          <p className="provider-card__note">{sourceCount} {isCopilot ? (sourceCount === 1 ? 'session' : 'sessions') : (sourceCount === 1 ? 'source' : 'sources')} found · {approved} approved{awaitingApproval ? ` · ${awaitingApproval} awaiting approval` : ''}. {autoImportEnabled ? 'Current and new usage updates automatically.' : 'One approval imports saved usage and includes new sessions automatically.'}</p>
-          <button type="button" className={`button ${autoImportEnabled ? 'button--secondary' : 'button--primary'}`} disabled={actionsDisabled} onClick={() => onAutoImportChange(!autoImportEnabled)}>
-            <Icon name={autoImportEnabled ? 'refresh' : 'check'} />{autoImportEnabled ? 'Stop including new sessions' : `Approve and import ${usageLabel[provider.provider ?? ''] ?? provider.display_name}`}
+          <p className="provider-card__note">{sourceCount} {isCopilot ? (sourceCount === 1 ? 'session' : 'sessions') : (sourceCount === 1 ? 'source' : 'sources')} found · {approved} approved{awaitingApproval ? ` · ${awaitingApproval} awaiting approval` : ''}. {requiresReapproval ? `Your current folder permission needs renewal to import ${provider.provider === 'codex' ? 'existing, new, and archived Codex sessions' : `existing and new ${usageLabel[provider.provider ?? ''] ?? provider.display_name}`}.` : autoImportEnabled ? 'Current and new usage updates automatically.' : 'One approval imports saved usage and includes new sessions automatically.'}</p>
+          <button type="button" className={`button ${autoImportEnabled && !requiresReapproval ? 'button--secondary' : 'button--primary'}`} disabled={actionsDisabled} onClick={() => onAutoImportChange(requiresReapproval || !autoImportEnabled)}>
+            <Icon name={autoImportEnabled ? 'refresh' : 'check'} />{requiresReapproval ? `Reconnect and import ${usageLabel[provider.provider ?? ''] ?? provider.display_name}` : autoImportEnabled ? 'Stop including new sessions' : `Approve and import ${usageLabel[provider.provider ?? ''] ?? provider.display_name}`}
           </button>
         </div>
       ) : null}

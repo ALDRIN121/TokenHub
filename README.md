@@ -197,11 +197,21 @@ shorter date range. Cached responses refresh when imported data changes.
 
 `GET /api/v1/usage` returns canonical totals plus agent, model, and session
 breakdowns. Session identifiers are opaque, stable hashes; original session IDs
-and source paths are not exposed. The same Claude message deduplication is used
-throughout the explorer. Optional timezone-aware `from` and `to` query bounds
-filter usage by recorded event time; the upper bound is exclusive. Known older
-parsers re-read approved sources on startup to add
-model/session metadata without changing previously imported Codex counters.
+and source paths are not exposed. Claude message IDs and Codex response IDs
+deduplicate copied records across approved files throughout the explorer.
+Optional timezone-aware `from` and `to` query bounds filter usage by recorded
+event time; the upper bound is exclusive. Known older parsers re-read approved
+sources on startup. Revised records reconcile their counters, metadata, and
+dates, and refresh cached totals and trends.
+
+Codex discovery includes active and archived sessions. Each folder has its own
+approval; enabling automatic import grants the currently discovered folders.
+If a folder's filesystem identity changes, **Reconnect and import** explicitly
+renews its approval. Existing imported history remains visible while a source
+is unavailable. The token summary reports collection freshness and coverage
+limitations. Hermes session totals are attributed to the session's end date
+(or start date while active), so daily and weekly totals cannot resolve when
+individual tokens were used within that session.
 
 ## Data boundaries
 

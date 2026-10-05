@@ -8,7 +8,7 @@ from pathlib import Path
 from tokenhub.database.models import SourceRecord
 from tokenhub.database.repositories import SourceRepository, UsageRepository
 from tokenhub.discovery.service import DiscoveryService
-from tokenhub.domain.models import SourceState, SyncCursor
+from tokenhub.domain.models import APPROVED_SOURCE_STATES, SourceState, SyncCursor
 from tokenhub.ingestion.progress import ScanInterrupted, report
 from tokenhub.ingestion.service import IngestionService, UnsupportedSourceError
 from tokenhub.security.paths import open_source_path
@@ -40,18 +40,30 @@ class CollectionService:
             self.on_change()
 
     def enable(self, connector_id: str, should_stop: Callable[[], bool] = lambda: False) -> None:
-        results = self.discovery.last_results or self.discovery.discover()
-        candidate = next(
-            (
+        # Renewal is an explicit action against freshly discovered, safely
+        # anchored directories, never a silent response to an expired grant.
+        results = self.discovery.discover()
+        candidates = [
                 self.discovery.candidate(source.source_id)
                 for result in results if result.connector_id == connector_id
-                for source in result.sources if source.scan_supported
-            ),
-            None,
-        )
-        if candidate is None:
+                for source in result.sources if source.scan_supported and source.state is not SourceState.DISABLED
+        ]
+        if not candidates:
             raise UnsupportedSourceError("no supported source was discovered")
-        self.sources.enable_auto_import(candidate)
+        roots = {str(candidate.approved_root): candidate for candidate in candidates}
+        for candidate in roots.values():
+            self.sources.enable_auto_import(candidate)
+        for candidate in candidates:
+            if should_stop():
+                return
+            saved = self.sources.get(candidate.source_id)
+            if saved.state == SourceState.DISCOVERED.value or (
+                saved.state in {state.value for state in APPROVED_SOURCE_STATES}
+                and (saved.approved_root, saved.approved_root_device, saved.approved_root_inode)
+                != (str(candidate.approved_root), candidate.approved_root_device, candidate.approved_root_inode)
+            ):
+                self.ingestion.approve(candidate.source_id, renew=True)
+                self._seen_files.pop(candidate.source_id, None)
         self.bump()
         self.run_once(should_stop, connector_id=connector_id)
 
@@ -60,12 +72,9 @@ class CollectionService:
         report("discovering")
         failures: set[str] = set()
         changed = False
-        roots = {root.connector_id: root for root in self.sources.auto_import_roots()}
+        roots = {(root.connector_id, root.approved_root): root for root in self.sources.auto_import_roots()}
         for result in self.discovery.discover():
             if connector_id is not None and result.connector_id != connector_id:
-                continue
-            root = roots.get(result.connector_id)
-            if root is None:
                 continue
             for view in result.sources:
                 if should_stop():
@@ -73,6 +82,9 @@ class CollectionService:
                 if not view.scan_supported or view.state is not SourceState.DISCOVERED:
                     continue
                 candidate = self.discovery.candidate(view.source_id)
+                root = roots.get((result.connector_id, str(candidate.approved_root)))
+                if root is None:
+                    continue
                 if (
                     str(candidate.approved_root) != root.approved_root
                     or candidate.approved_root_device != root.approved_root_device
@@ -197,11 +209,33 @@ class CollectionService:
         )
 
     def status(self, interval: float) -> dict[str, object]:
-        connectors = sorted(root.connector_id for root in self.sources.auto_import_roots())
+        roots = self.sources.auto_import_roots()
+        connectors = sorted({root.connector_id for root in roots})
+        grants = {(root.connector_id, root.approved_root): (root.approved_root_device, root.approved_root_inode)
+                  for root in roots}
+        needs_approval: set[str] = set()
+        candidates = [self.discovery.candidate(view.source_id)
+                      for result in self.discovery.last_results or []
+                      for view in result.sources if view.scan_supported and view.state is not SourceState.DISABLED]
+        # Status uses the collector's cached discovery metadata: polling does
+        # not walk or open provider files.
+        with self.sources.session.begin():
+            saved = self.sources._existing_sources([candidate.source_id for candidate in candidates])
+            for candidate in candidates:
+                identity = (candidate.approved_root_device, candidate.approved_root_inode)
+                grant = grants.get((candidate.connector_id, str(candidate.approved_root)))
+                previous = saved[candidate.source_id]
+                if (candidate.connector_id in connectors and grant != identity) or (
+                    previous.canonical_path is not None
+                    and (previous.approved_root, previous.approved_root_device, previous.approved_root_inode)
+                    != (str(candidate.approved_root), *identity)
+                ):
+                    needs_approval.add(candidate.connector_id)
         return {
             "scan_interval_seconds": interval,
             "codex_auto_import": "codex-local" in connectors,
             "auto_import_connectors": connectors,
+            "requires_reapproval_connectors": sorted(needs_approval),
             "last_scan_at": self.last_scan_at.isoformat() if self.last_scan_at else None,
             "failed_source_count": self.failed_source_count,
             "data_version": self.data_version,

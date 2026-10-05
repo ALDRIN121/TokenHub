@@ -77,6 +77,7 @@ class Container:
         self._status: dict[str, Any] = {
             "scan_interval_seconds": settings.scan_interval_seconds, "codex_auto_import": False,
             "auto_import_connectors": [], "last_scan_at": None, "failed_source_count": 0,
+            "requires_reapproval_connectors": [],
             # A new process cannot accidentally reuse a browser's old version.
             "data_version": time.time_ns() // 1000,
         }

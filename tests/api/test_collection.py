@@ -359,9 +359,8 @@ def test_shutdown_interrupts_a_scan_between_sources(client: TestClient, tmp_path
     scanned: list[str] = []
     original = container.services.ingestion.rescan
     container.services.ingestion.rescan = lambda source_id, **kw: scanned.append(source_id) or original(source_id, **kw)
-    calls = iter([False] * 6 + [True] * 100)
-    collection.run_once(lambda: next(calls))
-    assert 0 < len(scanned) < 4
+    collection.run_once(lambda: bool(scanned))
+    assert len(scanned) == 1
     container.services.ingestion.rescan = original
 
 
@@ -407,8 +406,8 @@ def test_stored_parser_upgrade_does_not_need_rediscovery(client: TestClient, tmp
         freshness = second.get('/api/v1/data-quality').json()['source_freshness'][0]
         assert freshness['state'] == 'healthy'
         services = restarted.state.container.services
-        assert services.source_repository.get(source_id).parser_version == 'codex-jsonl-v5'
-        assert services.usage_repository.current_cursor(source_id).parser_version == 'codex-jsonl-v5'
+        assert services.source_repository.get(source_id).parser_version == 'codex-jsonl-v6'
+        assert services.usage_repository.current_cursor(source_id).parser_version == 'codex-jsonl-v6'
         assert freshness['unsupported_records'] == 0
 
 

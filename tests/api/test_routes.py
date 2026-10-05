@@ -134,7 +134,7 @@ def test_lifespan_migrates_and_restart_recovers_approval(client: TestClient, api
     source_id = codex_id(client)
     assert client.post(f"/api/v1/sources/{source_id}/approve", headers=ORIGIN).status_code == 200
     with sqlite3.connect(tmp_path / "data" / "tokenhub.sqlite3") as database:
-        assert database.execute("SELECT version_num FROM alembic_version").fetchone() == ("0006_performance_jobs",)
+        assert database.execute("SELECT version_num FROM alembic_version").fetchone() == ("0007_multiple_usage_roots",)
     restarted = create_app(api_app.state.container.settings)
     with TestClient(restarted, base_url="http://127.0.0.1:7432") as second:
         restarted.state.container.collect()

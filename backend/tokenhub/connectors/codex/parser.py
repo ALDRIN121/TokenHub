@@ -73,6 +73,7 @@ class ParsedCodexScan:
     source_mtime_ns: int
     safe_prefix_fingerprint: str
     full_reparse: bool
+    record_identity_aliases: tuple[tuple[str, str], ...]
 
 
 def parse_codex_jsonl(
@@ -84,6 +85,7 @@ def parse_codex_jsonl(
     if start_offset < 0:
         raise ValueError("start offset must be nonnegative")
     events: list[UsageEvent] = []
+    record_identity_aliases: list[tuple[str, str]] = []
     context = _ModelContext()
     safe_byte_offset = start_offset
     unsupported_records = 0
@@ -143,6 +145,7 @@ def parse_codex_jsonl(
                 unsupported_records += 1
             else:
                 events.append(event)
+                record_identity_aliases.append((str(record["ordinal"]), event.record_identity))
 
     if snapshot_records and not (events or context.saw_usage_record):
         # Snapshots normally repeat what per-response records already carry. A
@@ -158,6 +161,7 @@ def parse_codex_jsonl(
         source_mtime_ns=source_stat.st_mtime_ns,
         safe_prefix_fingerprint=prefix_hasher.hexdigest(),
         full_reparse=full_reparse,
+        record_identity_aliases=tuple(record_identity_aliases),
     )
 
 
@@ -197,7 +201,7 @@ def _parse_usage_record(
         connector_id=source.connector_id,
         provider=source.provider,
         source_id=source.source_id,
-        record_identity=str(ordinal),
+        record_identity=(f"response:{response_id}" if (response_id := usage_identifier(payload.get("response_id"))) else f"ordinal:{ordinal}"),
         timestamp=timestamp,
         input_total_tokens=input_total_tokens,
         output_total_tokens=output_total_tokens,

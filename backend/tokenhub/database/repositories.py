@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import Table, case, delete, func, select, true, union_all, update
+from sqlalchemy import Table, case, delete, func, or_, select, true, union_all, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, aliased
@@ -119,7 +119,7 @@ class SourceRepository:
             )
         return found
 
-    def approve(self, source_id: str) -> SourceRecord:
+    def approve(self, source_id: str, *, renew: bool = False) -> SourceRecord:
         """Persist the validated discovery path only for a discovered source."""
         candidate = self._pending_candidates.get(source_id)
         if candidate is None:
@@ -142,7 +142,9 @@ class SourceRepository:
             source = self.session.get(SourceRecord, source_id)
             if source is None:
                 raise LookupError(f"unknown source: {source_id}")
-            if source.state != SourceState.DISCOVERED.value:
+            if source.state != SourceState.DISCOVERED.value and not (
+                renew and source.state in {state.value for state in APPROVED_SOURCE_STATES}
+            ):
                 raise ValueError("only discovered sources may be approved")
             source.canonical_path = str(approved_path)
             source.approved_root = str(candidate.approved_root)
@@ -193,11 +195,11 @@ class SourceRepository:
     def upgrade_codex_parser_versions(self) -> None:
         """Upgrade known parsers without altering approvals, counts, or cursors.
 
-        Old cursors force a reparse on collection; existing Codex rows receive
-        metadata only, while the snapshot parsers reconcile their source rows.
+        Old cursors force a reparse on collection; the Codex response-identity
+        upgrade and snapshot parsers reconcile their source rows.
         """
         upgrades = [
-            ("codex-local", "codex", "jsonl", ["codex-jsonl-v1", "codex-jsonl-v2", "codex-jsonl-v3", "codex-jsonl-v4"], PARSER_VERSION),
+            ("codex-local", "codex", "jsonl", ["codex-jsonl-v1", "codex-jsonl-v2", "codex-jsonl-v3", "codex-jsonl-v4", "codex-jsonl-v5"], PARSER_VERSION),
             ("claude-code-local", "claude_code", "jsonl", ["claude-jsonl-v1"], CLAUDE_PARSER_VERSION),
             ("hermes-local", "hermes", "sqlite", ["hermes-sqlite-v1"], HERMES_PARSER_VERSION),
         ]
@@ -242,7 +244,7 @@ class SourceRepository:
         with self.session.begin():
             self.session.execute(
                 insert(AutoImportRootRecord).values(**values).on_conflict_do_update(
-                    index_elements=["connector_id"], set_=values
+                    index_elements=["connector_id", "approved_root"], set_=values
                 )
             )
 
@@ -278,51 +280,100 @@ class UsageRepository:
         unsupported_records: int = 0,
         record_import: bool = True,
         replace_events: bool = False,
+        record_identity_aliases: tuple[tuple[str, str], ...] = (),
     ) -> ImportOutcome:
         if any(event.source_id != cursor.source_id for event in events):
             raise ValueError("scan events and cursor must belong to the same source")
         inserted_events = 0
         visible_change = False
+        # Replaying intermediate history must not turn an unchanged final
+        # observation into a new correction that outranks other copies.
+        observations = list({row.record_identity: row for row in events}.values())
+        counter_names = ("timestamp", "input_total_tokens", "output_total_tokens",
+                         "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
+        reconciliation_time = datetime.now(UTC).replace(tzinfo=None)
         report("saving", records_saved=0, records_total=len(events))
         with self.session.begin():
-            if replace_events:
-                removed = self.session.execute(
-                    delete(UsageEventRecord).where(
-                        UsageEventRecord.source_id == cursor.source_id
-                    )
-                )
-                visible_change = cast(CursorResult[Any], removed).rowcount > 0
             table = cast(Table, UsageEventRecord.__table__)
+            previous_identities: set[str] = set()
+            if replace_events:
+                # Reconcile surviving records before pruning absent ones so a
+                # rebuild preserves known corrections over stale copies.
+                previous_identities = set(self.session.scalars(select(UsageEventRecord.record_identity).where(
+                    UsageEventRecord.source_id == cursor.source_id,
+                )))
+                visible_change = bool(previous_identities)
+            alias_rows: dict[str, Any] = {}
+            aliases = list(dict.fromkeys(old for old, _ in record_identity_aliases))
+            for start in range(0, len(aliases), 500):
+                old_rows = self.session.execute(select(table).where(
+                    table.c.source_id == cursor.source_id,
+                    table.c.record_identity.in_(aliases[start:start + 500]),
+                    table.c.parser_version != cursor.parser_version,
+                )).mappings()
+                alias_rows.update((row["record_identity"], row) for row in old_rows)
+            baselines = {new: alias_rows[old] for old, new in record_identity_aliases if old in alias_rows}
+            alias_revisions = {
+                row.record_identity: (
+                    reconciliation_time if any(
+                        baselines[row.record_identity][name] != (
+                            row.timestamp.astimezone(UTC).replace(tzinfo=None)
+                            if name == "timestamp" else getattr(row, name)
+                        ) for name in counter_names
+                    ) else baselines[row.record_identity]["reconciled_at"]
+                ) for row in observations if row.record_identity in baselines
+            }
+            for start in range(0, len(aliases), 500):
+                removed = self.session.execute(delete(UsageEventRecord).where(
+                    UsageEventRecord.source_id == cursor.source_id,
+                    UsageEventRecord.record_identity.in_(aliases[start:start + 500]),
+                    UsageEventRecord.parser_version != cursor.parser_version,
+                ))
+                visible_change = visible_change or cast(CursorResult[Any], removed).rowcount > 0
             statement = insert(table)
+            counter_changed = or_(*(table.c[name].is_distinct_from(getattr(statement.excluded, name))
+                                   for name in counter_names))
+            reconciled_at = case((counter_changed, reconciliation_time),
+                                 else_=table.c.reconciled_at)
             statement = statement.on_conflict_do_update(
                 index_elements=["source_id", "record_identity"],
-                # Reparsed Codex records enrich metadata but never revise
-                # previously observed token counters.
-                set_={name: getattr(statement.excluded, name) for name in (
-                    "model_name", "session_id", "model_attribution", "parser_version",
-                )},
+                # Provider response identities also reconcile later corrected
+                # counters; an idempotent replay still leaves totals unchanged.
+                set_={"reconciled_at": reconciled_at, **{name: getattr(statement.excluded, name) for name in (
+                    "timestamp", "input_total_tokens", "output_total_tokens",
+                    "cache_read_tokens", "cache_write_tokens", "reasoning_tokens",
+                    "measurement_type", "quality", "model_name", "session_id",
+                    "model_attribution", "parser_version",
+                )}},
             )
             seen: set[str] = set()
-            for start in range(0, len(events), 500):
+            for start in range(0, len(observations), 500):
                 report("saving", records_saved=start)
-                chunk = events[start:start + 500]
+                chunk = observations[start:start + 500]
                 identities = {row.record_identity for row in chunk}
-                existing = {identity: (model, session_id, attribution) for identity, model, session_id, attribution in self.session.execute(select(UsageEventRecord.record_identity, UsageEventRecord.model_name, UsageEventRecord.session_id, UsageEventRecord.model_attribution).where(
+                existing = {row.record_identity: row for row in self.session.scalars(select(UsageEventRecord).where(
                     UsageEventRecord.source_id == cursor.source_id,
                     UsageEventRecord.record_identity.in_(identities),
                 ))}
                 visible_change = visible_change or any(
-                    row.record_identity in existing and existing[row.record_identity] != (row.model_name, row.session_id, row.model_attribution)
-                    for row in chunk
+                    row.record_identity in existing and (
+                        existing[row.record_identity].timestamp
+                        != row.timestamp.astimezone(UTC).replace(tzinfo=None) or
+                        any(
+                        getattr(existing[row.record_identity], name) != getattr(row, name)
+                        for name in ("input_total_tokens", "output_total_tokens", "cache_read_tokens",
+                                     "cache_write_tokens", "reasoning_tokens", "model_name", "session_id",
+                                     "model_attribution", "measurement_type", "quality")
+                    )) for row in chunk
                 )
-                inserted_events += len(identities - existing.keys() - seen)
+                inserted_events += len(identities - seen if replace_events else identities - existing.keys() - seen)
                 seen.update(identities)
                 self.session.connection().execute(statement, [{
                     "connector_id": row.connector_id,
                     "provider": row.provider.value,
                     "source_id": row.source_id,
                     "record_identity": row.record_identity,
-                    "timestamp": row.timestamp,
+                    "timestamp": row.timestamp.astimezone(UTC).replace(tzinfo=None),
                     "input_total_tokens": row.input_total_tokens,
                     "output_total_tokens": row.output_total_tokens,
                     "cache_read_tokens": row.cache_read_tokens,
@@ -334,7 +385,14 @@ class UsageRepository:
                     "model_name": row.model_name,
                     "session_id": row.session_id,
                     "model_attribution": row.model_attribution,
+                    "reconciled_at": alias_revisions.get(row.record_identity),
                 } for row in chunk])
+            obsolete = sorted(previous_identities - seen)
+            for start in range(0, len(obsolete), 500):
+                self.session.execute(delete(UsageEventRecord).where(
+                    UsageEventRecord.source_id == cursor.source_id,
+                    UsageEventRecord.record_identity.in_(obsolete[start:start + 500]),
+                ))
             self.session.execute(
                 insert(SyncCursorRecord)
                 .values(
@@ -421,11 +479,18 @@ class UsageRepository:
     @staticmethod
     def _canonical_deltas() -> tuple[Any, Any]:
         records = UsageEventRecord
+        cross_file = or_(records.provider == Provider.CLAUDE_CODE.value,
+            (records.provider == Provider.CODEX.value) & (records.parser_version == PARSER_VERSION)
+            & records.record_identity.startswith("response:"))
         ranked = select(
             records,
             func.row_number().over(
                 partition_by=(records.connector_id, records.record_identity),
                 order_by=(
+                    # A recorded correction outranks an unchanged stale copy.
+                    # First observations/replays do not claim a new revision.
+                    case((records.provider == Provider.CODEX.value,
+                          records.reconciled_at), else_=None).desc(),
                     case((records.input_total_tokens.is_not(None)
                           & records.output_total_tokens.is_not(None), 1), else_=0).desc(),
                     (func.coalesce(records.input_total_tokens, 0)
@@ -435,12 +500,12 @@ class UsageRepository:
                 ),
             ).label("message_rank"),
         ).where(records.measurement_type == MeasurementType.DELTA.value,
-                records.provider == Provider.CLAUDE_CODE.value).subquery()
-        # Other providers already have source-scoped identities. Only Claude
-        # copies require the global window, selected before any date bound.
+                cross_file).subquery()
+        # Deduplicate stable response/message identities before applying date
+        # bounds. Legacy Codex ordinals remain scoped to their source file.
         canonical = union_all(
             select(records).where(records.measurement_type == MeasurementType.DELTA.value,
-                                  records.provider != Provider.CLAUDE_CODE.value),
+                                  ~cross_file),
             select(*(ranked.c[column.name] for column in records.__table__.columns))
                 .where(ranked.c.message_rank == 1),
         ).subquery()

@@ -202,7 +202,7 @@ def test_large_scan_batches_database_calls_and_preserves_duplicates(session: Ses
         assert repeated.inserted_events == 0
         assert repeated.duplicate_events == 1001
         assert len(statements) < 20
-        assert repo.dashboard_totals().workload_tokens == 125000
+        assert repo.dashboard_totals().workload_tokens == 1024000
         assert repo.observed_events()[0].model_name == "recorded-model"
     finally:
         event.remove(engine, "before_cursor_execute", observe)

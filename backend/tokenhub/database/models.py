@@ -55,6 +55,7 @@ class UsageEventRecord(Base):
     model_name: Mapped[str | None] = mapped_column(String)
     session_id: Mapped[str | None] = mapped_column(String)
     model_attribution: Mapped[str] = mapped_column(String, nullable=False, default="unknown")
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AutoImportRootRecord(Base):
@@ -63,7 +64,7 @@ class AutoImportRootRecord(Base):
     __tablename__ = "auto_import_roots"
 
     connector_id: Mapped[str] = mapped_column(String, primary_key=True)
-    approved_root: Mapped[str] = mapped_column(String, nullable=False)
+    approved_root: Mapped[str] = mapped_column(String, primary_key=True)
     approved_root_device: Mapped[int] = mapped_column(Integer, nullable=False)
     approved_root_inode: Mapped[int] = mapped_column(Integer, nullable=False)
 

@@ -101,6 +101,7 @@ class ScanResult:
     partial_final_record: bool = False
     unsupported_records: int = 0
     replace_events: bool = False
+    record_identity_aliases: tuple[tuple[str, str], ...] = ()
 
 
 class UsageConnector(Protocol):
