@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5
+
+The usage-first dashboard adds a compact summary, authentic bundled agent icons, continuous models/sessions navigation, persistent agent scope, independent table contexts, and a header theme switch. Sync details move to an accessible drawer while source setup stays in Sources. Valid usage remains available during metadata failures; changing scope hides obsolete counters and rows. See [dashboard guide](docs/dashboard-guide.md) and [release notes](docs/releases/0.1.5.md).
+
+## 0.1.4
+
+Improved token accuracy guidance, source-consent recovery and connector normalization. Added checks for trend reconciliation, packaged time-zone data and performance budgets.
+
 ## 0.1.3 - 2026-09-29
 
 ### Fixed

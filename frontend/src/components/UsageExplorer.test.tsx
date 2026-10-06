@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { usageFixture } from '../test/fixtures';
@@ -148,8 +148,8 @@ it('explains Hermes date attribution beside totals and follows the selected agen
   const note = screen.getByRole('note', { name: 'Hermes session attribution' });
   expect(note).toHaveTextContent(/entire session.*end date.*start date.*active/i);
   expect(note).toHaveTextContent(/daily.*weekly.*model.*per-request precision/i);
-  expect(note.closest('section')).toHaveAttribute('id', 'usage-explorer');
-  expect(note.compareDocumentPosition(screen.getByText('Workload tokens')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(note.closest('section')).toHaveAttribute('id', 'overview');
+  expect(note.closest('details')).toHaveClass('usage-advanced');
   await user.click(screen.getByRole('button', { name: 'View sessions for gpt-test in Codex' }));
   expect(screen.queryByRole('note', { name: 'Hermes session attribution' })).not.toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'Filter by Hermes Agent' }));
@@ -161,4 +161,43 @@ it('explains Hermes date attribution beside totals and follows the selected agen
 it('does not show a Hermes attribution caveat when Hermes has no recorded events', () => {
   render(<UsageExplorer data={{ ...usageFixture, providers: [...usageFixture.providers, { ...usageFixture.totals, provider: 'hermes', event_count: 0 }] }} />);
   expect(screen.queryByRole('note', { name: 'Hermes session attribution' })).not.toBeInTheDocument();
+});
+
+it('preserves independent searches across tabs and same-agent selection', async () => {
+ const user = userEvent.setup(); render(<UsageExplorer data={data} />);
+ await user.type(screen.getByRole('searchbox'), 'gpt');
+ await user.click(screen.getByRole('tab', { name: /^Sessions / }));
+ expect(screen.getByRole('searchbox')).toHaveValue('');
+ await user.type(screen.getByRole('searchbox'), 'opaque');
+ await user.click(screen.getByRole('tab', { name: /^Models / }));
+ expect(screen.getByRole('searchbox')).toHaveValue('gpt');
+ await user.click(screen.getByRole('button', { name: 'Show all agents' }));
+ expect(screen.getByRole('searchbox')).toHaveValue('gpt');
+});
+
+it('uses keyboard tabs and hides pending scope counters and empty guidance', async () => {
+ const view = render(<UsageExplorer data={data} />);
+ const modelsTab = screen.getByRole('tab', { name: /^Models / });
+ modelsTab.focus(); fireEvent.keyDown(modelsTab, { key: 'ArrowRight' });
+ expect(screen.getByRole('tab', { name: /^Sessions / })).toHaveFocus();
+ expect(screen.getByRole('table', { name: 'Session usage' })).toBeInTheDocument();
+ fireEvent.keyDown(screen.getByRole('tab', { name: /^Sessions / }), { key: 'Home' });
+ expect(modelsTab).toHaveFocus();
+ view.rerender(<UsageExplorer data={{ ...data, totals: { ...data.totals, event_count: 0 } }} isLoading />);
+ expect(screen.getByText('Workload tokens').closest('div')).toHaveTextContent('—');
+ expect(screen.queryByText('Your usage explorer starts with an import')).not.toBeInTheDocument();
+ expect(screen.queryByRole('button', { name: /View sessions for gpt-test/ })).not.toBeInTheDocument();
+});
+
+it('controlled Models navigation exits model drilldown and preserves model search', async () => {
+ const user = userEvent.setup();
+ const view = render(<UsageExplorer data={data} mode="models" />);
+ await user.type(screen.getByRole('searchbox'), 'gpt');
+ await user.click(screen.getByRole('button', { name: 'View sessions for gpt-test in Codex' }));
+ view.rerender(<UsageExplorer data={data} mode="sessions" />);
+ expect(screen.getByRole('heading', { name: 'gpt-test' })).toBeInTheDocument();
+ view.rerender(<UsageExplorer data={data} mode="models" />);
+ expect(screen.queryByRole('heading', { name: 'gpt-test' })).not.toBeInTheDocument();
+ expect(screen.getByRole('searchbox')).toHaveValue('gpt');
+ expect(screen.getByRole('table', { name: 'Model usage' })).toHaveTextContent('gpt-test');
 });

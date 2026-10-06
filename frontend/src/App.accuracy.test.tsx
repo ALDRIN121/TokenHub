@@ -13,6 +13,8 @@ function serveHealthyQuality() {
   server.use(http.get('/api/v1/data-quality', () => HttpResponse.json(healthyQuality)));
 }
 async function accuracyNotice() {
+  const summary = await screen.findByText('Counter details and accuracy');
+  if (!summary.closest('details')?.open) await userEvent.setup().click(summary);
   return screen.findByRole('note', { name: 'Usage freshness and completeness' });
 }
 
@@ -29,6 +31,7 @@ describe('usage accuracy guidance', () => {
       }),
     );
     render(<App />);
+    await userEvent.setup().click(screen.getByRole('link', { name: 'Sources' }));
     const codex = await screen.findByRole('article', { name: 'OpenAI Codex' });
     expect(within(codex).getByText(/folder.*permission.*renew/i)).toHaveTextContent(/existing.*new.*archived.*Codex/i);
     await userEvent.setup().click(within(codex).getByRole('button', { name: 'Reconnect and import Codex sessions' }));
@@ -40,6 +43,7 @@ describe('usage accuracy guidance', () => {
   it('offers consent renewal for a connector even if its files are currently absent', async () => {
     server.use(http.get('/api/v1/collection', () => HttpResponse.json({ ...collectionStatus, requires_reapproval_connectors: ['claude-code-local'] })));
     render(<App />);
+    await userEvent.setup().click(screen.getByRole('link', { name: 'Sources' }));
     const claude = await screen.findByRole('article', { name: 'Claude Code' });
     expect(within(claude).getByRole('button', { name: 'Reconnect and import Claude Code sessions' })).toBeEnabled();
     expect(within(screen.getByRole('article', { name: 'OpenAI Codex' })).queryByRole('button', { name: /Reconnect/ })).not.toBeInTheDocument();
@@ -55,7 +59,7 @@ describe('usage accuracy guidance', () => {
     if (stale) expect(note).toHaveTextContent(/out of date/i);
     else expect(note).not.toHaveTextContent(/out of date/i);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Token summary' }).parentElement?.nextElementSibling).toBe(note);
+    expect(note.closest('details')).toHaveAttribute('open');
   });
 
   it('does not claim freshness when records exist without a completed scan', async () => {
@@ -96,7 +100,9 @@ describe('usage accuracy guidance', () => {
     server.use(http.get('/api/v1/collection', () => HttpResponse.json({ ...collectionStatus, failed_source_count: 2 })));
     render(<App />);
     expect(await accuracyNotice()).toHaveTextContent(/some usage may be missing/i);
-    expect(screen.getByRole('alert')).toHaveTextContent(/could not read 2 sources/i);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: /Sync details/ }));
+    expect(screen.getByText(/could not read 2 sources/i)).toBeInTheDocument();
     expect(await accuracyNotice()).toHaveTextContent(/last completed scan/i);
     expect(await accuracyNotice()).not.toHaveTextContent(/successful refresh/i);
   });
@@ -123,6 +129,7 @@ describe('usage accuracy guidance', () => {
     render(<App />);
     expect(await accuracyNotice()).toHaveTextContent(/out of date/i);
     expect(await accuracyNotice()).toHaveTextContent(/some usage may be missing/i);
+    await userEvent.setup().click(screen.getByRole('button', { name: /Sync details/ }));
     await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh data' }));
     await waitFor(() => expect(screen.getByRole('note', { name: 'Usage freshness and completeness' })).not.toHaveTextContent(/out of date|some usage may be missing/i));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();

@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelUsage, SessionUsage, UsageBreakdown, UsageTotals } from '../types';
 import { formatMetric, MetricCard } from './MetricCard';
+import { AgentIcon } from './AgentIcon';
 import { Icon } from './Icon';
 import { usageDateRange, type UsagePeriod } from '../dateRange';
 import { getUsagePage, getSessionModels } from '../api/client';
@@ -59,25 +60,53 @@ function TokenHeaders({ mode, sort, direction, onSort }: {
   })}</tr>;
 }
 
-export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriodChange, onSelectedDayChange, accuracyNotice }: {
+export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriodChange, onSelectedDayChange, accuracyNotice, provider: controlledProvider, onProviderChange, mode: controlledMode, onModeChange, isLoading = false }: {
   data: UsageBreakdown;
+  provider?: string; onProviderChange?: (id: string) => void;
+  mode?: 'models' | 'sessions'; onModeChange?: (mode: 'models' | 'sessions') => void;
+  isLoading?: boolean;
   accuracyNotice?: { messages: string[]; warning: boolean };
   period?: UsagePeriod;
   selectedDay?: string;
   onPeriodChange?: (period: UsagePeriod) => void;
   onSelectedDayChange?: (day: string) => void;
 }) {
-  const [provider, setProvider] = useState('all');
-  const [mode, setMode] = useState<'models' | 'sessions'>('models');
-  const [query, setQuery] = useState('');
-  const [sort, setSort] = useState<SortKey>('workload_tokens');
-  const [direction, setDirection] = useState<SortDirection>('descending');
-  const [selected, setSelected] = useState<ModelUsage | null>(null);
+  const accuracyDetails = useRef<HTMLDetailsElement>(null);
+  const chipStrip = useRef<HTMLDivElement>(null);
+  const dateLabel = ({ all: 'All time', today: 'Today', yesterday: 'Yesterday', last7: 'Last 7 days', last30: 'Last 30 days', day: selectedDay || 'Choose a date' })[period];
+  const [internalProvider, setInternalProvider] = useState('all');
+  const [internalMode, setInternalMode] = useState<'models' | 'sessions'>('models');
+  const provider = controlledProvider ?? internalProvider;
+  useEffect(() => {
+    const strip = chipStrip.current;
+    const chip = strip?.querySelector<HTMLButtonElement>('[aria-pressed="true"]');
+    if (strip && chip) {
+      const left = chip.offsetLeft - strip.offsetLeft;
+      if (left < strip.scrollLeft) strip.scrollLeft = left;
+      else if (left + chip.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left + chip.offsetWidth - strip.clientWidth;
+    }
+  }, [provider]);
+  const mode = controlledMode ?? internalMode;
+  const setProvider = (id: string) => { setInternalProvider(id); onProviderChange?.(id); };
+  const setMode = (next: 'models' | 'sessions') => { setInternalMode(next); onModeChange?.(next); };
+  const initialContext = () => ({ query: '', sort: 'workload_tokens' as SortKey, direction: 'descending' as SortDirection, limit: 25, offset: 0 });
+  const [contexts, setContexts] = useState({ models: initialContext(), sessions: initialContext() });
+  const { query, sort, direction, limit, offset } = contexts[mode];
+  const updateContext = (patch: Partial<typeof contexts.models>) => setContexts(current => ({ ...current, [mode]: { ...current[mode], ...patch } }));
+  const setQuery = (query: string) => updateContext({ query, offset: 0 });
+  const setSort = (sort: SortKey) => updateContext({ sort });
+  const setDirection = (direction: SortDirection) => updateContext({ direction });
+  const setLimit = (limit: number) => updateContext({ limit });
+  const setOffset = (offset: number) => updateContext({ offset });
+  const [selectedState, setSelected] = useState<ModelUsage | null>(null);
+  // Models navigation immediately removes drilldown filters, before effects run.
+  const selected = mode === 'sessions' ? selectedState : null;
+  useEffect(() => { if (controlledMode === 'models') setSelected(null); }, [controlledMode]);
   const [selectedSummary, setSelectedSummary] = useState<ModelUsage | null>(null);
+  const [selectedSummaryScope, setSelectedSummaryScope] = useState('');
+  const modelScope = (row: ModelUsage) => JSON.stringify([period, selectedDay, data.data_version, row.provider, row.model_name]);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [limit, setLimit] = useState(25);
-  const [offset, setOffset] = useState(0);
-  const [page, setPage] = useState<{ items: (ModelUsage | SessionUsage)[]; total: number; mode: 'models' | 'sessions' }>({ items: [], total: 0, mode: 'models' });
+  const [page, setPage] = useState<{ items: (ModelUsage | SessionUsage)[]; total: number; mode: 'models' | 'sessions'; key?: string }>({ items: [], total: 0, mode: 'models' });
   const [pageLoading, setPageLoading] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
@@ -89,7 +118,9 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
     ...(selected ? { provider: selected.provider, ...(selected.model_name === null ? { unknown_model: 'true' } : { model: selected.model_name }) } : {}),
     offset: String(offset),
   }), [period, selectedDay, provider, query, sort, direction, selected, offset]);
-  useEffect(() => { setOffset(0); setExpanded(null); }, [period, selectedDay, provider, query, sort, direction, selected]);
+  const pageKey = JSON.stringify({ mode, options, version: data.data_version });
+  const validPage = page.key === pageKey && !isLoading;
+  useEffect(() => { setContexts({ models: initialContext(), sessions: initialContext() }); setSelected(null); setExpanded(null); }, [period, selectedDay, provider]);
   useEffect(() => {
     if (!remote) return;
     const controller = new AbortController();
@@ -98,7 +129,7 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
       getUsagePage(mode, options, controller.signal).then((result) => {
         if (controller.signal.aborted) return;
         if (offset > 0 && offset >= result.total) setOffset(0);
-        else setPage({ ...result, mode });
+        else setPage({ ...result, mode, key: pageKey });
       }).catch(() => { if (!controller.signal.aborted) setPageError('Could not load this page. Your imported data is still available.'); })
         .finally(() => { if (!controller.signal.aborted) setPageLoading(false); });
     }, query.trim() ? 200 : 0);
@@ -110,15 +141,15 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
     const controller = new AbortController();
     getUsagePage('models', { ...usageDateRange(period, selectedDay), provider: selectedProvider,
       ...(selectedName === null ? { unknown_model: 'true' } : { model: selectedName }) }, controller.signal)
-      .then((result) => { if (!controller.signal.aborted) setSelectedSummary(result.items[0] as ModelUsage ?? null); })
+      .then((result) => { if (!controller.signal.aborted) { setSelectedSummary(result.items[0] as ModelUsage ?? null); setSelectedSummaryScope(JSON.stringify([period, selectedDay, data.data_version, selectedProvider, selectedName])); } })
       .catch(() => { if (!controller.signal.aborted) setPageError('Could not update this model summary. Try refreshing data.'); });
     return () => controller.abort();
   }, [remote, selectedProvider, selectedName, period, selectedDay, data.data_version]);
-  const summary = provider === 'all' ? data.totals : data.providers.find((row) => row.provider === provider);
-  const selectedModel = selected ? remote ? selectedSummary : data.models.find((row) => row.provider === selected.provider && row.model_name === selected.model_name) : null;
+  const summary = isLoading ? undefined : provider === 'all' ? data.totals : data.providers.find((row) => row.provider === provider);
+  const selectedModel = selected ? remote ? selectedSummaryScope === modelScope(selected) ? selectedSummary : null : data.models.find((row) => row.provider === selected.provider && row.model_name === selected.model_name) : null;
   const search = query.trim().toLowerCase();
   const compare = (a: UsageTotals, b: UsageTotals) => sort === 'identity' ? 0 : compareCounts(a[sort], b[sort], direction);
-  const models = useMemo(() => remote ? (page.mode === 'models' && mode === 'models' ? page.items : []) as ModelUsage[] : data.models.filter((row) =>
+  const models = useMemo(() => isLoading ? [] : remote ? (validPage && page.mode === 'models' && mode === 'models' ? page.items : []) as ModelUsage[] : data.models.filter((row) =>
     (provider === 'all' || row.provider === provider) && `${modelName(row.model_name)} ${agentName(row.provider)}`.toLowerCase().includes(search)
   ).sort((a, b) => {
     const names = compareNames(modelName(a.model_name), modelName(b.model_name)) || compareNames(agentName(a.provider), agentName(b.provider));
@@ -128,8 +159,8 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
       return direction === 'ascending' ? names : -names;
     }
     return compare(a, b) || names;
-  }), [remote, page, mode, data.models, provider, search, sort, direction]);
-  const sessions = useMemo(() => remote ? ((page.mode === 'sessions' && mode === 'sessions' ? page.items : []) as SessionUsage[]).map((row) => ({ row, metrics: row.contribution ?? row })) : data.sessions.filter((row) =>
+  }), [isLoading, remote, page, validPage, mode, data.models, provider, search, sort, direction]);
+  const sessions = useMemo(() => isLoading ? [] : remote ? ((validPage && page.mode === 'sessions' && mode === 'sessions' ? page.items : []) as SessionUsage[]).map((row) => ({ row, metrics: row.contribution ?? row })) : data.sessions.filter((row) =>
     (provider === 'all' || row.provider === provider) &&
     (!selected || row.provider === selected.provider && row.models.some((model) => model.model_name === selected.model_name)) &&
     `${row.session_key} ${agentName(row.provider)} ${row.models.map((model) => modelName(model.model_name)).join(' ')}`.toLowerCase().includes(search)
@@ -139,15 +170,15 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
     // The Models column describes the entire session, even when its displayed
     // token counters are filtered to one model's contribution.
     return (sort === 'model_count' ? compare(a.row, b.row) : compare(a.metrics, b.metrics)) || names;
-  }), [remote, page, mode, data.sessions, provider, selected, search, sort, direction]);
-  const visibleSummary = selected ? selectedModel : summary;
+  }), [isLoading, remote, page, validPage, mode, data.sessions, provider, selected, search, sort, direction]);
+  const visibleSummary = isLoading ? null : selected ? selectedModel : summary;
   const selectedAgent = selected?.provider ?? provider;
   const hasHermesUsage = (selectedAgent === 'all' || selectedAgent === 'hermes') &&
     [...data.providers, ...data.models, ...data.sessions].some((row) => row.provider === 'hermes' && row.event_count > 0);
   const largest = models.reduce((value, row) => Math.max(value, row.workload_tokens ?? 0), 0);
   const unknownModels = remote ? Object.entries(data.unknown_model_events ?? {}).filter(([id]) => provider === 'all' || provider === id).reduce((total, [, value]) => total + value, 0) : data.models.filter((row) => row.model_name === null && (provider === 'all' || row.provider === provider)).reduce((count, row) => count + row.event_count, 0);
 
-  const modelGroups = remote ? mode === 'models' && page.mode === 'models' ? page.total
+  const modelGroups = remote ? mode === 'models' && page.mode === 'models' ? (validPage ? page.total : 0)
     : provider === 'all' ? data.providers.reduce((total, row) => total + row.model_count + Number((data.unknown_model_events?.[row.provider] ?? 0) > 0), 0)
     : (summary?.model_count ?? 0) + Number((data.unknown_model_events?.[provider] ?? 0) > 0)
     : models.length;
@@ -158,60 +189,71 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
     setLimit(25); setOffset(0);
   }
   function switchMode(next: 'models' | 'sessions') {
-    if (next === 'sessions' && sort === 'session_count') setSort('model_count');
-    if (next === 'models' && sort === 'model_count') setSort('session_count');
-    setMode(next); setLimit(25); setOffset(0); setExpanded(null);
+    setMode(next); setExpanded(null);
   }
   function chooseAgent(id: string) {
-    setProvider(id); setSelected(null); setQuery(''); setExpanded(null); setLimit(25);
+    if (id === provider) return;
+    setProvider(id); setSelected(null); setExpanded(null);
   }
-  function showModels() { setSelected(null); switchMode('models'); setQuery(''); setExpanded(null); }
-  function drillInto(row: ModelUsage) { setSelectedSummary(row); setSelected(row); switchMode('sessions'); setQuery(''); setExpanded(null); }
+  function showModels() { setSelected(null); switchMode('models'); setExpanded(null); }
+  function drillInto(row: ModelUsage) { setSelectedSummaryScope(modelScope(row)); setSelectedSummary(row); setSelected(row); setContexts(current => ({ ...current, sessions: initialContext() })); switchMode('sessions'); setExpanded(null); }
   const sortLabels: [SortKey, string][] = [
     ['identity', mode === 'models' ? 'Model name' : 'Session'], ...tokenSortLabels,
     [mode === 'models' ? 'session_count' : 'model_count', mode === 'models' ? 'Sessions' : 'Models'],
   ];
 
-  return <section id="usage-explorer" className="usage-explorer panel" aria-labelledby="explorer-heading">
-    <div className="explorer-heading"><div><span className="eyebrow">THE TOKEN LEDGER</span><h2 id="explorer-heading">Agent breakdown</h2><p>Choose a date and agent to compare its models and sessions.</p></div><div className="date-filters"><label>Date range<select aria-label="Date range" value={period} onChange={(event) => onPeriodChange?.(event.target.value as UsagePeriod)}><option value="all">All time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="last7">Last 7 days</option><option value="last30">Last 30 days</option><option value="day">Choose a date</option></select></label>{period === 'day' ? <label>Usage date<input aria-label="Usage date" type="date" value={selectedDay} onChange={(event) => onSelectedDayChange?.(event.target.value)} /></label> : null}</div></div>
-    <div className="agent-filters" aria-label="Filter by agent">
+  return <section id="overview" className="usage-explorer panel" aria-labelledby="explorer-heading">
+    <div className="explorer-heading"><div><span className="eyebrow">THE TOKEN LEDGER</span><h2 id="explorer-heading">Your token hub.</h2><p>See where your tokens go. Explore recorded usage across your local coding agents.</p></div><div className="date-filters"><label>Agent<select aria-label="Agent" value={provider} onChange={event => chooseAgent(event.target.value)}><option value="all">All agents</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label><label>Date range<select aria-label="Date range" value={period} onChange={(event) => onPeriodChange?.(event.target.value as UsagePeriod)}><option value="all">All time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="last7">Last 7 days</option><option value="last30">Last 30 days</option><option value="day">Choose a date</option></select></label>{period === 'day' ? <label>Usage date<input aria-label="Usage date" type="date" value={selectedDay} onChange={(event) => onSelectedDayChange?.(event.target.value)} /></label> : null}</div></div>
+    <div className="section-heading"><h3>Token summary</h3><span className="section-meta">Selected date and agent</span></div>
+    <dl className="metric-grid">
+      <div className="workload-summary"><MetricCard label="Workload tokens" value={visibleSummary?.workload_tokens ?? null} icon="layers" note="Complete input + output records" featured />{accuracyNotice?.warning ? <button type="button" className="coverage-indicator" onClick={() => { if (accuracyDetails.current) accuracyDetails.current.open = true; }}>Coverage · review</button> : null}</div>
+      <MetricCard label="Input tokens" value={visibleSummary?.input_total_tokens ?? null} icon="input" note="Includes cached input" />
+      <MetricCard label="Output tokens" value={visibleSummary?.output_total_tokens ?? null} icon="output" note="Includes reasoning" />
+      <MetricCard label="Activity" value={visibleSummary?.session_count ?? null} icon="sources" note="Recorded sessions" />
+    </dl>
+    <div className="usage-overview-grid"><div className="agent-ranking-panel"><div className="section-heading"><h3>Agent breakdown</h3></div><p className="agent-ranking-description">Shares across all agents in selected period</p><div className="agent-filters" aria-label="Filter by agent">
       <button className="agent-filter agent-filter--all" type="button" aria-pressed={provider === 'all'} onClick={() => chooseAgent('all')} aria-label="Show all agents">
-        <span className="agent-filter__name"><Icon name="layers" />All agents</span><strong title={full(data.totals.workload_tokens)}>{formatMetric(data.totals.workload_tokens)}<small>tokens</small></strong><span className="agent-filter__detail">{data.totals.session_count} sessions · {data.totals.model_count} models</span><span className="agent-filter__bar"><span style={{ width: '100%' }} /></span>
+        <span className="agent-filter__name"><Icon name="layers" />All agents</span>
       </button>
-      {agents.map((agent) => {
-        const row = data.providers.find((item) => item.provider === agent.id);
+      {[...agents].sort((a, b) => compareCounts(data.providers.find(row => row.provider === a.id)?.workload_tokens ?? null, data.providers.find(row => row.provider === b.id)?.workload_tokens ?? null, 'descending')).map((agent) => {
+        const row = isLoading ? undefined : data.providers.find((item) => item.provider === agent.id);
         const share = data.totals.workload_tokens ? (row?.workload_tokens ?? 0) / data.totals.workload_tokens * 100 : 0;
         return <button key={agent.id} type="button" className={`agent-filter agent-color--${agent.id}`} aria-pressed={provider === agent.id} onClick={() => chooseAgent(agent.id)} aria-label={`Filter by ${agent.name}`}>
-          <span className="agent-filter__name"><Icon name={agent.icon} />{agent.name}{row && <span className="agent-filter__share">{percent(row.workload_tokens, data.totals.workload_tokens)}</span>}</span>
-          <strong title={full(row?.workload_tokens ?? null)}>{formatMetric(row?.workload_tokens)}<small>tokens</small></strong><span className="agent-filter__detail">{row?.session_count ?? 0} sessions · {row?.model_count ?? 0} models</span><span className="agent-filter__bar"><span style={{ width: `${share}%` }} /></span>
+          <span className="agent-filter__name"><AgentIcon provider={agent.id} />{agent.name}{row && <span className="agent-filter__share">{percent(row.workload_tokens, data.totals.workload_tokens)}</span>}</span>
+          <strong title={full(row?.workload_tokens ?? null)}>{formatMetric(row?.workload_tokens)}<small>tokens</small></strong><span className="agent-filter__detail">{row?.session_count ?? '—'} sessions · {row?.model_count ?? '—'} models</span><span className="agent-filter__bar"><span style={{ width: `${share}%` }} /></span>
         </button>;
       })}
     </div>
-    <div className="section-heading"><h3>Token summary</h3><span className="section-meta">Selected date and agent</span></div>
+    </div>
+    {range || data.totals.event_count > 0 ? <UsageTrends compact range={range} provider={selected?.provider ?? (provider === 'all' ? undefined : provider)} model={selected?.model_name ?? undefined} unknownModel={selected?.model_name === null} version={data.data_version} isLoading={isLoading} /> : <div className="usage-trends"><h3>Usage trends</h3><p>Import usage to see your recorded activity.</p></div>}
+    </div>
+    <details ref={accuracyDetails} className="usage-advanced"><summary>Counter details and accuracy</summary>
     {accuracyNotice ? <div className={`usage-accuracy notice${accuracyNotice.warning ? ' notice--warning' : ''}`} role="note" aria-label="Usage freshness and completeness"><Icon name="info" /><div>{accuracyNotice.messages.map((message) => <p key={message}>{message}</p>)}</div></div> : null}
     {hasHermesUsage ? <p className="notice notice--warning" role="note" aria-label="Hermes session attribution"><Icon name="hermes" /><span>Hermes assigns the entire session’s usage to its end date, or its start date while active. Daily and weekly totals and the session-reported model lack per-request precision; usage across days and model switches cannot be separated.</span></p> : null}
-    <dl className="metric-grid">
-      <MetricCard label="Workload tokens" value={visibleSummary?.workload_tokens ?? null} icon="layers" note="Complete input + output records" featured />
-      <MetricCard label="Input tokens" value={visibleSummary?.input_total_tokens ?? null} icon="input" note="Includes cached input" />
-      <MetricCard label="Output tokens" value={visibleSummary?.output_total_tokens ?? null} icon="output" note="Includes reasoning" />
-    </dl>
     <dl className="breakdown-grid">
       <MetricCard label="Cache read tokens" value={visibleSummary?.cache_read_tokens ?? null} icon="cache" note="Within input" />
       <MetricCard label="Cache write tokens" value={visibleSummary?.cache_write_tokens ?? null} icon="cache" note="Reported separately" />
       <MetricCard label="Reasoning tokens" value={visibleSummary?.reasoning_tokens ?? null} icon="reasoning" note="Within output" />
     </dl>
     <div className="overview-details"><UsageComposition dashboard={visibleSummary ?? { ...data.totals, workload_tokens: null, input_total_tokens: null, output_total_tokens: null, event_count: 0 }} /><aside className="privacy-card" id="privacy-note"><span className="privacy-card__icon"><Icon name="shield" /></span><h3>Your data stays yours.</h3><p>TokenHub parses approved local usage sources and retains only usage metadata. Prompts, transcripts, credentials, and provider accounts are never stored or sent anywhere.</p><span><Icon name="check" />No data leaves this machine</span></aside></div>
-    {range || data.totals.event_count > 0 ? <UsageTrends range={range} provider={selected?.provider ?? (provider === 'all' ? undefined : provider)}
-      model={selected?.model_name ?? undefined} unknownModel={selected?.model_name === null} version={data.data_version} /> : null}
-    {data.totals.event_count === 0 ? range ? <div className="explorer-empty"><Icon name="sources" /><h3>No usage recorded for this date range</h3><p>Choose another date range to see models and sessions. The comparison above includes any previous-period usage.</p></div> : <div className="explorer-empty"><Icon name="sources" /><h3>Your usage explorer starts with an import</h3><p>Connect an agent’s local sources to see models and sessions here.</p><a className="button button--primary" href="#local-sources">Connect local sources<Icon name="arrow" /></a></div> : <>
+    </details>
+    <section id="analytics" className="analysis-workspace" aria-label="Usage analysis">
+    <div className="analysis-context"><div className="ledger-tabs" role="tablist" aria-label="Usage grouping" onKeyDown={event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 'models' : event.key === 'End' ? 'sessions' : mode === 'models' ? 'sessions' : 'models';
+      setSelected(null); switchMode(next);
+      event.currentTarget.querySelector<HTMLButtonElement>(`[data-mode="${next}"]`)?.focus();
+    }}>{(['models', 'sessions'] as const).map(tab => <button key={tab} type="button" data-mode={tab} role="tab" aria-selected={mode === tab} tabIndex={mode === tab ? 0 : -1} onClick={() => { setSelected(null); switchMode(tab); }}>{tab === 'models' ? 'Models' : 'Sessions'} <span>{tab === 'models' ? `${modelGroups} groups` : summary?.session_count ?? '—'}</span></button>)}</div><span>{provider === 'all' ? 'All agents' : agentName(provider)} · {dateLabel}</span><div className="analysis-agent-chips" ref={chipStrip}>{[{ id: 'all', name: 'All agents' }, ...agents].map(agent => <button type="button" key={agent.id} aria-pressed={provider === agent.id} onClick={() => chooseAgent(agent.id)}>{agent.name}</button>)}</div></div>
+    {!isLoading && !pageError && data.totals.event_count === 0 ? range ? <div className="explorer-empty"><Icon name="sources" /><h3>No usage recorded for this date range</h3><p>Choose another date range to see models and sessions. The comparison above includes any previous-period usage.</p></div> : <div className="explorer-empty"><Icon name="sources" /><h3>Your usage explorer starts with an import</h3><p>Connect an agent’s local sources to see models and sessions here.</p><a className="button button--primary" href="#local-sources">Connect local sources<Icon name="arrow" /></a></div> : <>
       <div className="ledger-toolbar">
-        {selected ? <div className="model-breadcrumb"><button type="button" onClick={showModels}><Icon name="arrow" />All models</button><span>/</span><h3>{modelName(selected.model_name)}</h3><span className={`agent-label agent-color--${selected.provider}`}>{agentName(selected.provider)}</span></div> : <div className="ledger-tabs" aria-label="Usage grouping"><button type="button" aria-pressed={mode === 'models'} onClick={showModels}>Models <span>{modelGroups} groups</span></button><button type="button" aria-pressed={mode === 'sessions'} onClick={() => { switchMode('sessions'); setQuery(''); }}>Sessions <span>{summary?.session_count ?? 0}</span></button></div>}
+        {selected ? <div className="model-breadcrumb"><button type="button" onClick={showModels}><Icon name="arrow" />All models</button><span>/</span><h3>{modelName(selected.model_name)}</h3><span className={`agent-label agent-color--${selected.provider}`}>{agentName(selected.provider)}</span></div> : null}
         <div className="ledger-controls"><label className="usage-search"><Icon name="search" /><input type="search" aria-label="Search usage" placeholder={mode === 'models' ? 'Find a model…' : 'Find a session or model…'} value={query} onChange={(event) => { setQuery(event.target.value); setLimit(25); }} /></label><label className="usage-sort">Sort by<select value={sort} onChange={(event) => changeSort(event.target.value as SortKey, false)}>{sortLabels.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><button type="button" className="sort-direction" aria-label={`Sort ${direction === 'ascending' ? 'descending' : 'ascending'}`} title={`Sorted ${direction}; click to reverse`} onClick={() => changeSort(sort)}><SortIndicator active direction={direction} /></button></div>
       </div>
-      <div className="ledger-summary"><span><strong>{formatMetric(visibleSummary?.workload_tokens)}</strong> tokens{selected ? ' in this model' : provider === 'all' ? ' across all agents' : ` in ${agentName(provider)}`}</span><span>{visibleSummary?.event_count.toLocaleString('en-US') ?? 0} usage records</span><span>{visibleSummary?.session_count ?? 0} sessions</span>{selectedModel?.attribution === 'session' ? <span className="attribution-note">Session-reported model</span> : null}</div>
-      {selected && !selectedModel ? <p className="model-missing-note" role="status">No usage for this model in the current import.</p> : null}
+      <div className="ledger-summary"><span><strong>{formatMetric(visibleSummary?.workload_tokens)}</strong> tokens{selected ? ' in this model' : provider === 'all' ? ' across all agents' : ` in ${agentName(provider)}`}</span><span>{visibleSummary?.event_count.toLocaleString('en-US') ?? '—'} usage records</span><span>{visibleSummary?.session_count ?? '—'} sessions</span>{selectedModel?.attribution === 'session' ? <span className="attribution-note">Session-reported model</span> : null}</div>
+      {selected && !selectedModel && !isLoading && !pageLoading ? <p className="model-missing-note" role="status">No usage for this model in the current import.</p> : null}
       {pageError ? <p className="notice notice--error" role="alert">{pageError}<button className="button button--secondary" onClick={() => setRetry(retry + 1)}>Retry page</button></p> : null}
-      {remote && pageLoading ? <p className="page-loading" role="status">Updating usage page…</p> : null}
+      {(isLoading || remote && (!validPage || pageLoading)) ? <p className="page-loading" role="status">Updating usage page…</p> : null}
       <div className="ledger-table-wrap" aria-busy={remote && pageLoading} tabIndex={0} aria-label="Token breakdown table; scroll to see all columns">
         {mode === 'models' ? <table className="ledger-table" aria-label="Model usage"><thead><TokenHeaders mode="models" sort={sort} direction={direction} onSort={changeSort} /></thead><tbody>
           {models.slice(0, remote ? 25 : limit).map((row, index) => <tr key={JSON.stringify([row.provider, row.model_name])} className={`agent-color--${row.provider}`}>
@@ -221,11 +263,12 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
         </tbody></table> : <table className="ledger-table" aria-label="Session usage"><thead><TokenHeaders mode="sessions" sort={sort} direction={direction} onSort={changeSort} /></thead><tbody>
           {sessions.slice(0, remote ? 25 : limit).map(({ row, metrics }) => <SessionRow remote={remote} version={data.data_version} range={usageDateRange(period, selectedDay)} key={`${row.provider}:${row.session_key}`} row={row} metrics={metrics} expanded={expanded === row.session_key} toggle={() => setExpanded(expanded === row.session_key ? null : row.session_key)} selected={selected?.model_name} />)}
         </tbody></table>}
-        {(mode === 'models' ? models.length : sessions.length) === 0 ? <div className="ledger-no-results"><h3>{query ? 'No usage matches your search' : 'No imported usage for this agent'}</h3><p>{query ? 'Try another model name or session identifier.' : 'Approve its local sources to start collecting usage.'}</p>{query ? <button type="button" className="button button--secondary" onClick={() => setQuery('')}>Clear search</button> : <a href="#local-sources">View local sources</a>}</div> : null}
+        {!isLoading && !pageError && (!remote || validPage && !pageLoading) && (mode === 'models' ? models.length : sessions.length) === 0 ? <div className="ledger-no-results"><h3>{query ? 'No usage matches your search' : 'No imported usage for this agent'}</h3><p>{query ? 'Try another model name or session identifier.' : 'Approve its local sources to start collecting usage.'}</p>{query ? <button type="button" className="button button--secondary" onClick={() => setQuery('')}>Clear search</button> : <a href="#local-sources">View local sources</a>}</div> : null}
       </div>
-      {remote ? <div className="ledger-bottom"><span>Showing {page.total ? offset + 1 : 0}–{Math.min(offset + 25, page.total)} of {page.total} {mode}</span><div className="page-controls"><button type="button" className="button button--secondary" disabled={pageLoading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous page</button><button type="button" className="button button--secondary" disabled={pageLoading || offset + 25 >= page.total} onClick={() => { setOffset(offset + 25); setExpanded(null); }}>Next page</button></div></div> : <div className="ledger-bottom"><span>Showing {Math.min(limit, mode === 'models' ? models.length : sessions.length)} of {mode === 'models' ? models.length : sessions.length} {mode}</span>{(mode === 'models' ? models.length : sessions.length) > limit ? <button type="button" className="button button--secondary" onClick={() => setLimit(limit + 25)}>Show 25 more</button> : <span>Hover a count for the exact number.</span>}</div>}
+      {remote ? <div className="ledger-bottom"><span>Showing {(validPage ? page.total : 0) ? offset + 1 : 0}–{Math.min(offset + 25, (validPage ? page.total : 0))} of {(validPage ? page.total : 0)} {mode}</span><div className="page-controls"><button type="button" className="button button--secondary" disabled={pageLoading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous page</button><button type="button" className="button button--secondary" disabled={pageLoading || offset + 25 >= (validPage ? page.total : 0)} onClick={() => { setOffset(offset + 25); setExpanded(null); }}>Next page</button></div></div> : <div className="ledger-bottom"><span>Showing {Math.min(limit, mode === 'models' ? models.length : sessions.length)} of {mode === 'models' ? models.length : sessions.length} {mode}</span>{(mode === 'models' ? models.length : sessions.length) > limit ? <button type="button" className="button button--secondary" onClick={() => setLimit(limit + 25)}>Show 25 more</button> : <span>Hover a count for the exact number.</span>}</div>}
       <div className="ledger-notes"><p><Icon name="info" /><span>Total = input + output. Cache is included in input; reasoning is included in output. Unknown values appear as —.{visibleSummary?.incomplete_event_count ? ` ${visibleSummary.incomplete_event_count} records have incomplete input or output; totals include complete records only.` : ''}</span></p>{(provider === 'all' || provider === 'vscode_copilot') && data.providers.some((row) => row.provider === 'vscode_copilot') ? <p><Icon name="copilot" /><span>Copilot Chat totals include only saved requests with token counters. Inline suggestions and requests without counters are not included.</span></p> : null}{(provider === 'all' || provider === 'antigravity') && data.providers.some((row) => row.provider === 'antigravity') ? <p><Icon name="quality" /><span>Antigravity usage comes from saved conversation counters. Unrecognized generations are excluded rather than estimated.</span></p> : null}{unknownModels > 0 ? <p><Icon name="quality" /><span>{unknownModels.toLocaleString('en-US')} records have no recorded model. Their tokens remain in “Model not recorded”.</span></p> : null}</div>
     </>}
+    </section>
   </section>;
 }
 

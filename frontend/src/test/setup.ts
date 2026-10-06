@@ -57,3 +57,7 @@ afterEach(() => {
 afterAll(() => {
   server.close();
 });
+
+// jsdom does not implement the native modal dialog methods.
+HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', ''); };
+HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); };

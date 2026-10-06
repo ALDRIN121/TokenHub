@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { expect, it } from 'vitest';
+import { UsageTrends } from './UsageTrends';
 import { UsageExplorer } from './UsageExplorer';
 import { usageFixture } from '../test/fixtures';
 import { trendFixture } from '../test/trendFixtures';
@@ -190,4 +191,17 @@ it('retries a failed comparison page before allowing navigation to skip its grou
   await userEvent.setup().click(within(panel).getByRole('button', { name: 'Next comparisons' }));
   await within(panel).findByText('comparison-50');
   expect(offsets).toEqual([0, 25, 25, 50]);
+});
+
+it('compact trends retain chart controls while disclosing detailed comparisons', async () => {
+ server.use(http.get('/api/v1/usage/trends', () => HttpResponse.json(trendFixture)));
+ render(<UsageTrends compact />);
+ const panel = await screen.findByRole('region', { name: 'Usage trends' });
+ await within(panel).findByRole('img', { name: /Sep 27.*150.*100/ });
+ expect(within(panel).getByRole('button', { name: 'Daily' })).toBeInTheDocument();
+ const disclosure = within(panel).getByText('Period breakdown and accuracy').closest('details');
+ expect(disclosure).not.toHaveAttribute('open');
+ await userEvent.setup().click(within(panel).getByText('Period breakdown and accuracy'));
+ expect(disclosure).toHaveAttribute('open');
+ expect(within(panel).getByRole('table', { name: 'Agent period comparison' })).toBeInTheDocument();
 });

@@ -13,9 +13,11 @@ import {
 } from './api/client';
 import { ProviderCard, RESCANNABLE_STATES } from './components/ProviderCard';
 import { Icon } from './components/Icon';
-import { ImportProgress, jobIsActive } from './components/ImportProgress';
+import { jobIsActive } from './components/ImportProgress';
 import { UsageExplorer } from './components/UsageExplorer';
-import { localDay, usageDateRange, type UsagePeriod } from './dateRange';
+import { SyncDetails } from './components/SyncDetails';
+import { readDashboardLocation, saveDashboardLocation, scrollDashboard, type DashboardSection, type AnalysisMode } from './dashboardNavigation';
+import { usageDateRange, type UsagePeriod } from './dateRange';
 import type {
   UsageBreakdown,
   AcceptedJob,
@@ -127,17 +129,31 @@ export default function App() {
   const [status, setStatus] = useState<string | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeSection, setActiveSection] = useState('usage-explorer');
+  const [activeSection, setActiveSection] = useState<DashboardSection>(() => readDashboardLocation().section);
+  const [provider, setProvider] = useState(() => readDashboardLocation().provider);
+  const [mode, setMode] = useState<AnalysisMode>(() => readDashboardLocation().mode);
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [metadataError, setMetadataError] = useState<string | null>(null);
+  const metadataNeedsRetry = useRef(false);
+  const [scopeLoading, setScopeLoading] = useState(false);
+  const [dark, setDark] = useState(() => {
+    try { const theme = localStorage.getItem('tokenhub-theme'); if (theme) return theme === 'dark'; } catch { /* Storage can be unavailable in private contexts. */ }
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
+  });
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    try { localStorage.setItem('tokenhub-theme', dark ? 'dark' : 'light'); } catch { /* The current-page toggle still works without storage. */ }
+  }, [dark]);
   const [collection, setCollection] = useState<CollectionStatus | null>(null);
   const [settingAutoImport, setSettingAutoImport] = useState(false);
-  const [period, setPeriod] = useState<UsagePeriod>('all');
+  const [period, setPeriod] = useState<UsagePeriod>(() => readDashboardLocation().period);
   const [trackedJob, setTrackedJob] = useState<CollectionJob | null>(null);
   const [pendingJobId, setPendingJobId] = useState<string | null>(null);
   const [healthOffset, setHealthOffset] = useState(0);
   const [healthLoading, setHealthLoading] = useState(false);
   const healthOffsetRef = useRef(0);
   healthOffsetRef.current = healthOffset;
-  const [selectedDay, setSelectedDay] = useState(() => localDay(new Date()));
+  const [selectedDay, setSelectedDay] = useState(() => readDashboardLocation().selectedDay);
   const usageRange = useRef(usageDateRange(period, selectedDay));
   usageRange.current = usageDateRange(period, selectedDay);
   const refreshInFlight = useRef<Promise<void> | null>(null);
@@ -158,22 +174,31 @@ export default function App() {
         refreshAgain.current = false;
         const withMetadata = refreshMetadata.current;
         refreshMetadata.current = false;
-        const nextCollection = withMetadata ? await getCollectionStatus() : null;
-        if (mounted.current && nextCollection) setCollection(nextCollection);
+        let nextCollection: CollectionStatus | null = null;
+        let metadataCause: unknown = null;
+        if (withMetadata) {
+          try { nextCollection = await getCollectionStatus(); } catch (cause) { metadataCause = cause; }
+          if (mounted.current && nextCollection) setCollection(nextCollection);
+        }
         const requestedHealthOffset = healthOffsetRef.current;
-        const requests = withMetadata ? [getDiscovery(), getDataQuality(requestedHealthOffset), getUsageBreakdown(usageRange.current)] as const : [getUsageBreakdown(usageRange.current)] as const;
-        const results = await Promise.all(requests).catch(async (cause: unknown) => {
-          await Promise.allSettled(requests);
-          throw cause;
-        });
+        const requests = withMetadata ? [getUsageBreakdown(usageRange.current), getDiscovery(), getDataQuality(requestedHealthOffset)] : [getUsageBreakdown(usageRange.current)];
+        const results = await Promise.allSettled(requests);
         if (!mounted.current) return;
         if (refreshAgain.current) { if (withMetadata) refreshMetadata.current = true; continue; }
+        const nextUsage = results[0];
         if (withMetadata) {
-          setDiscovery(results[0] as DiscoveryResponse);
-          if (requestedHealthOffset === healthOffsetRef.current) setQuality(results[1] as DataQualityResponse);
-          seenVersion.current = nextCollection!.data_version;
-          setUsage(results[2] as UsageBreakdown);
-        } else setUsage(results[0] as UsageBreakdown);
+          const nextDiscovery = results[1], nextQuality = results[2];
+          if (nextDiscovery.status === 'fulfilled') setDiscovery(nextDiscovery.value as DiscoveryResponse);
+          else metadataCause ??= nextDiscovery.reason;
+          if (nextQuality.status === 'fulfilled') {
+            if (requestedHealthOffset === healthOffsetRef.current) setQuality(nextQuality.value as DataQualityResponse);
+          } else metadataCause ??= nextQuality.reason;
+          metadataNeedsRetry.current = metadataCause !== null;
+          setMetadataError(metadataCause === null ? null : describeError(metadataCause));
+          if (nextCollection) seenVersion.current = nextCollection.data_version;
+        }
+        if (nextUsage.status === 'fulfilled') { setScopeLoading(false); setUsage(nextUsage.value as UsageBreakdown); setError(null); }
+        else throw nextUsage.reason;
       } while (refreshAgain.current);
     })();
     refreshInFlight.current = operation;
@@ -212,9 +237,8 @@ export default function App() {
           setTrackedJob(job);
           if (!jobIsActive(job)) setPendingJobId(null);
         }
-        if (next.data_version !== seenVersion.current) await refresh();
-        if (active) setError(null);
-      } catch (cause: unknown) { if (active) setError(describeError(cause)); }
+        if (next.data_version !== seenVersion.current || metadataNeedsRetry.current) await refresh();
+      } catch (cause: unknown) { if (active) { metadataNeedsRetry.current = true; setMetadataError(describeError(cause)); } }
       finally { pending = false; }
     };
     const timer = window.setInterval(poll, importing ? 1_000 : 10_000);
@@ -300,54 +324,61 @@ export default function App() {
 
   const sourceNames = useMemo(() => new Map(discovery?.providers.flatMap((provider) => provider.sources.map((source) => [source.source_id, source.display_name] as const)) ?? []), [discovery]);
 
+  function navigate(section: DashboardSection) {
+    setActiveSection(section);
+    if (section === 'models' || section === 'sessions') setMode(section);
+    saveDashboardLocation(provider, period, selectedDay, section);
+    window.requestAnimationFrame(() => scrollDashboard(section));
+  }
+  function changeProvider(id: string) {
+    setProvider(id);
+    saveDashboardLocation(id, period, selectedDay, activeSection);
+  }
+  function changePeriod(next: UsagePeriod) {
+    if (next === period) return;
+    if (JSON.stringify(usageDateRange(next, selectedDay)) !== JSON.stringify(usageRange.current)) setScopeLoading(true);
+    setPeriod(next);
+    saveDashboardLocation(provider, next, selectedDay, activeSection);
+  }
+  function changeDay(day: string) {
+    if (day === selectedDay || !usageDateRange('day', day)) return;
+    if (JSON.stringify(usageDateRange(period, day)) !== JSON.stringify(usageRange.current)) setScopeLoading(true);
+    setSelectedDay(day);
+    saveDashboardLocation(provider, period, day, activeSection);
+  }
+  useEffect(() => {
+    const restore = () => {
+      const next = readDashboardLocation();
+      if (JSON.stringify(usageDateRange(next.period, next.selectedDay)) !== JSON.stringify(usageRange.current)) setScopeLoading(true);
+      setProvider(next.provider); setPeriod(next.period); setSelectedDay(next.selectedDay);
+      setActiveSection(next.section); setMode(next.mode);
+      window.requestAnimationFrame(() => scrollDashboard(next.section, false));
+    };
+    window.addEventListener('popstate', restore);
+    window.addEventListener('hashchange', restore);
+    return () => { window.removeEventListener('popstate', restore); window.removeEventListener('hashchange', restore); };
+  }, []);
+  useEffect(() => {
+    if (usage) window.requestAnimationFrame(() => scrollDashboard(readDashboardLocation().section, false));
+  }, [usage === null]);
+  const needsReview = metadataError !== null || error !== null || (collection?.failed_source_count ?? 0) > 0 ||
+    (collection?.requires_reapproval_connectors?.length ?? 0) > 0 ||
+    Object.entries(quality?.state_counts ?? {}).some(([state, count]) => count > 0 && INCOMPLETE_STATES.has(state));
+  const syncLabel = importing ? 'Syncing' : needsReview ? 'Sync · review' : collection ? 'Auto sync' : 'Sync · unconfirmed';
+
   return (
     <div className="app">
       <a className="skip-link" href="#main-content">Skip to dashboard</a>
-      <aside className="sidebar">
-        <a className="brand" href="#main-content" aria-label="TokenHub dashboard">
-          <span className="brand__mark"><Icon name="layers" /></span>
-          <span>TokenHub<small>Local usage observatory</small></span>
-        </a>
-        <div className="sidebar__label">Your workspace</div>
-        <nav className="sidebar__nav" aria-label="Dashboard sections">
-          {([
-            ['usage-explorer', 'layers', 'Usage explorer'],
-            ['local-sources', 'sources', 'Local sources'],
-          ] as const).map(([id, icon, label]) => (
-            <a key={id} href={`#${id}`} aria-current={activeSection === id ? 'location' : undefined} onClick={() => setActiveSection(id)}>
-              <Icon name={icon} /><span>{label}</span>
-            </a>
-          ))}
+      <header className="dashboard-header">
+        <a className="brand" href="#overview" aria-label="TokenHub dashboard" onClick={(event) => { event.preventDefault(); navigate('overview'); }}><span className="brand__mark"><Icon name="layers" /></span><span>TokenHub</span></a>
+        <nav className="dashboard-nav" aria-label="Dashboard sections">
+          {(['overview', 'models', 'sessions', 'sources'] as const).map((section) => <a key={section} href={`#${section}`} aria-current={activeSection === section ? 'location' : undefined} onClick={(event) => { event.preventDefault(); navigate(section); }}>{section[0].toUpperCase() + section.slice(1)}</a>)}
         </nav>
-        <div className="sidebar__privacy">
-          <Icon name="shield" />
-          <strong>Private by default</strong>
-          <p>Your data stays on this device. No accounts. No cloud sync.</p>
-          <a href="#privacy-note" onClick={() => setActiveSection('usage-explorer')}>How your data is handled</a>
-        </div>
-        <div className="sidebar__footer"><span className="status-dot" />Local workspace</div>
-      </aside>
-
+        <div className="header-tools"><button className={`sync-button${needsReview ? ' sync-button--warning' : ''}`} type="button" aria-label={`Sync details: ${syncLabel}`} aria-haspopup="dialog" onClick={() => setSyncOpen(true)}><span className="status-dot" /><span>{syncLabel}</span><Icon name="chevron" /></button><button className="theme-toggle" type="button" role="switch" aria-label="Dark mode" aria-checked={dark} title={dark ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => setDark(!dark)}><span aria-hidden="true">{dark ? '☾' : '☀'}</span></button></div>
+      </header>
       <main className="app__main" id="main-content" tabIndex={-1}>
-        <div className="topbar">
-          <span className="breadcrumb">Workspace <span>/</span> <strong>Usage explorer</strong></span>
-          <span className="device-pill"><Icon name="device" />On this device</span>
-        </div>
-        <header className="app__header">
-          <div>
-            <h1>Your token hub.</h1>
-            <p className="app__tagline">Token usage across your agents, models, and sessions.</p>
-            {collection ? <p className="sync-status"><span className="status-dot" />Auto sync every {collection.scan_interval_seconds} seconds{collection.last_scan_at ? ` · Last refreshed ${formatTimestamp(collection.last_scan_at)}` : ''}</p> : null}
-          </div>
-          <button type="button" className="button button--secondary" onClick={handleRefresh} disabled={actionsDisabled} aria-busy={refreshing}>
-            <Icon name="refresh" className={refreshing ? 'is-spinning' : ''} />Refresh data
-          </button>
-        </header>
-
-        {visibleJob ? <ImportProgress job={visibleJob} onRetry={importing ? undefined : handleRefresh} /> : null}
-        {error !== null ? <p className="notice notice--error" role="alert"><Icon name="info" />{error}</p> : null}
+        {error !== null && (usage === null || scopeLoading) ? <p className="notice notice--error" role="alert"><Icon name="info" />{error}<button type="button" className="button button--secondary" onClick={handleRefresh} disabled={actionsDisabled}>Refresh data</button></p> : null}
         {status !== null ? <p className="notice notice--success" role="status"><Icon name="check" />{status}</p> : null}
-        {collection && collection.failed_source_count > 0 ? <p className="notice notice--error" role="alert"><Icon name="info" />Automatic sync could not read {collection.failed_source_count} sources. It will retry on the next scan.</p> : null}
         {loading ? (
           <div className="loading-state" aria-live="polite" aria-busy="true">
             <Icon name="refresh" className="is-spinning" />Reading local provider data…
@@ -355,10 +386,12 @@ export default function App() {
           </div>
         ) : null}
 
-        {usage !== null ? <UsageExplorer data={usage} accuracyNotice={usageAccuracyNotice(usage, collection, quality, error, discovery)} period={period} selectedDay={selectedDay} onPeriodChange={setPeriod} onSelectedDayChange={setSelectedDay} /> : null}
+        <div hidden={activeSection === 'sources'}>
+          {usage !== null ? <UsageExplorer data={usage} accuracyNotice={usageAccuracyNotice(usage, collection, quality, error ?? metadataError, discovery)} period={period} selectedDay={selectedDay} onPeriodChange={changePeriod} onSelectedDayChange={changeDay} provider={provider} onProviderChange={changeProvider} mode={mode} onModeChange={(next) => { setMode(next); setActiveSection(next); saveDashboardLocation(provider, period, selectedDay, next); }} isLoading={scopeLoading} /> : null}
+        </div>
 
         {discovery !== null ? (
-          <section className="panel" id="local-sources" aria-labelledby="local-sources-heading">
+          <section className="panel sources-view" hidden={activeSection !== 'sources'} id="local-sources" aria-labelledby="local-sources-heading">
             <div className="section-heading">
               <div><h2 id="local-sources-heading">Local sources</h2><p className="panel__intro">Your coding agents, connected on your terms. Nothing is imported until you approve it.</p></div>
               <span className="section-meta">{detectedCount} providers detected</span>
@@ -399,6 +432,7 @@ export default function App() {
         ) : null}
         <footer className="app__footer"><span>TokenHub · Local usage observatory</span><span><Icon name="shield" />Observed data. No estimates.</span></footer>
       </main>
+      <SyncDetails open={syncOpen} onClose={() => setSyncOpen(false)} collection={collection} quality={quality} discovery={discovery} job={visibleJob} error={error ?? metadataError} onRefresh={handleRefresh} disabled={actionsDisabled} />
     </div>
   );
 }

@@ -11,6 +11,8 @@ subagent session logs, **Hermes Agent** session counters in its local state
 database, **VS Code Copilot Chat** saved sessions, and **Antigravity** conversation
 databases.
 
+For dashboard navigation, sessions, sync, themes and accuracy, see the [dashboard guide](https://github.com/ALDRIN121/TokenHub/blob/main/docs/dashboard-guide.md).
+
 ## Install and run
 
 Requires Python 3.12 or newer. Install from [PyPI](https://pypi.org/project/tokenhub/):
@@ -59,7 +61,7 @@ The packaged UI is mounted at `/`; the API also works if the built UI is absent.
 
 While TokenHub is running, it scans approved sources from all five providers at startup and every
 30 seconds. Every 10 seconds the explorer checks a small change counter
-(`data_version` in `GET /api/v1/collection`) and reloads only when it moved. **Refresh data** scans
+(`data_version` in `GET /api/v1/collection`) and reloads only when it moved. **Refresh data** in the header sync drawer scans
 approved sources immediately and shows the last scan time. Approving a provider
 in the UI also starts its first import immediately. Unchanged session files are
 skipped. Hermes and Antigravity databases are checked on each scan
@@ -163,14 +165,14 @@ Workload is input total plus output total; cache and reasoning are breakdowns,
 never extra usage. A metric the data cannot support is returned as `null` and
 rendered as an em dash — TokenHub never substitutes `0` for "unknown".
 
-The default **Usage explorer** combines the consolidated token summary with
-agent, model, and session breakdowns for Codex, Claude Code, Hermes Agent,
-VS Code Copilot, and Antigravity. Filter by all time, today, yesterday, the last
-7 or 30 days, or a selected local calendar date.
-Choose an agent to rank its models by total, input, output, cache-read, or
-reasoning tokens. Search for a model, select it to see its sessions, and expand
-a session to compare the models used inside it. Exact counts are available on
-hover. Source health and import quality appear together under **Local sources**.
+The **Overview** combines a compact token summary with all five agent rankings.
+Choose an agent and a local date range, then scroll to its sessions or use the
+header **Sessions** or **Models** links. Both tabs share one analysis workspace
+and retain independent search, sorting and pagination. Click a model to see its
+session contributions, or expand a session for its model counters. Exact counts
+are available on hover. **Sources** contains source setup, health and import
+quality; the header sync drawer contains operational progress and refresh.
+The header theme switch saves your light/dark preference locally.
 
 **Usage trends** shares the explorer's date, agent, and selected-model filters.
 Switch between daily totals and Monday-based weeks, and select total, input,
