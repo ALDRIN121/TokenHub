@@ -2,3 +2,8 @@
 frontend/index.html text eol=lf
 frontend/public/favicon.svg text eol=lf
 backend/tokenhub/web/** text eol=lf
+
+# Hashed/copied artwork must have identical bytes on every checkout.
+frontend/src/assets/agents/*.svg text eol=lf
+frontend/src/assets/agents/*.txt text eol=lf
+frontend/public/assets/*.txt text eol=lf
