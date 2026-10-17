@@ -108,7 +108,10 @@ def _snapshot(analytics: "AnalyticsService", events: Any, start: datetime | None
     paired = (union_all(current_query, select(previous_events, literal("previous").label("period")))
               if previous_events is not None else current_query).subquery().c
     bucket_count = days if granularity == "day" else (days + (start.astimezone(zone).weekday() if start else 0) + 6) // 7
-    series_limited = bucket_count > (366 if granularity == "day" else 260)
+    if granularity == "month" and start and end:
+        first_month, last_day = start.astimezone(zone).date(), end.astimezone(zone).date() - timedelta(days=1)
+        bucket_count = (last_day.year - first_month.year) * 12 + last_day.month - first_month.month + 1
+    series_limited = bucket_count > {"day": 366, "week": 260, "month": 120}[granularity]
     buckets = _buckets(analytics, paired, start, end, zone, granularity, days, all_time) if start and end and not series_limited else []
     return {"period": {"from": start.isoformat() if start else None, "to": end.isoformat() if end else None,
                        "previous_from": previous_start.isoformat() if previous_start else None,
@@ -133,16 +136,29 @@ def _buckets(analytics: "AnalyticsService", events: Any, start: datetime, end: d
         totals.pop("period")
         totals.pop("bucket")
         grouped[(row["period"], row["bucket"])] = totals
+    # A bounded SQL aggregation supplies real layers, rather than distributing
+    # period-wide agent shares over time (which would fabricate observations).
+    provider_rows = analytics.usage_repository.session.execute(
+        select(events.provider, bucket.label("bucket"), *fields(analytics, events))
+        .where(events.period == "current", events.timestamp.is_not(None))
+        .group_by(events.provider, bucket).order_by(events.provider)
+    ).mappings()
+    providers: dict[str, list[dict[str, Any]]] = {}
+    for row in provider_rows:
+        totals = project(row)
+        provider, bucket_key = totals.pop("provider"), totals.pop("bucket")
+        providers.setdefault(bucket_key, []).append({"provider": provider, "totals": totals})
     first, last = start.astimezone(zone).date(), end.astimezone(zone).date()
     cursor = bucket_date(first, granularity)
     result = []
     while cursor < last:
-        next_day = cursor + timedelta(days=7 if granularity == "week" else 1)
+        next_day = (cursor.replace(day=28) + timedelta(days=4)).replace(day=1) if granularity == "month" else cursor + timedelta(days=7 if granularity == "week" else 1)
         lower, upper = max(first, cursor), min(last, next_day)
         result.append({"from": lower.isoformat(), "to": upper.isoformat(),
             "previous_from": (lower - timedelta(days=days)).isoformat() if not all_time else None,
             "previous_to": (upper - timedelta(days=days)).isoformat() if not all_time else None,
             "current": grouped.get(("current", cursor.isoformat()), empty_totals()),
+            "providers": providers.get(cursor.isoformat(), []),
             "previous": grouped.get(("previous", cursor.isoformat()), empty_totals()) if not all_time else None})
         cursor = next_day
     return result

@@ -13,6 +13,7 @@ import {
 } from './api/client';
 import { ProviderCard, RESCANNABLE_STATES } from './components/ProviderCard';
 import { Icon } from './components/Icon';
+import { RefreshAge } from './components/RefreshAge';
 import { jobIsActive } from './components/ImportProgress';
 import { UsageExplorer } from './components/UsageExplorer';
 import { SyncDetails } from './components/SyncDetails';
@@ -30,6 +31,7 @@ import type {
   SourceFreshness,
 } from './types';
 import './styles.css';
+import './dashboard.css';
 
 /** States that mean TokenHub could not read everything a source contains. */
 const INCOMPLETE_STATES = new Set([
@@ -154,8 +156,9 @@ export default function App() {
   const healthOffsetRef = useRef(0);
   healthOffsetRef.current = healthOffset;
   const [selectedDay, setSelectedDay] = useState(() => readDashboardLocation().selectedDay);
-  const usageRange = useRef(usageDateRange(period, selectedDay));
-  usageRange.current = usageDateRange(period, selectedDay);
+  const [selectedEndDay, setSelectedEndDay] = useState(() => readDashboardLocation().selectedEndDay);
+  const usageRange = useRef(usageDateRange(period, selectedDay, undefined, selectedEndDay));
+  usageRange.current = usageDateRange(period, selectedDay, undefined, selectedEndDay);
   const refreshInFlight = useRef<Promise<void> | null>(null);
   const refreshAgain = useRef(false);
   const refreshMetadata = useRef(false);
@@ -217,7 +220,7 @@ export default function App() {
     if (lastRange.current === next) return;
     lastRange.current = next;
     refresh(true).catch((cause: unknown) => { if (mounted.current) setError(describeError(cause)); });
-  }, [period, selectedDay, refresh]);
+  }, [period, selectedDay, selectedEndDay, refresh]);
 
   const visibleJob = collection?.active_job ?? (pendingJobId ? trackedJob ?? collection?.latest_job : collection?.latest_job ?? trackedJob);
   const importing = jobIsActive(visibleJob) || pendingJobId !== null;
@@ -327,30 +330,37 @@ export default function App() {
   function navigate(section: DashboardSection) {
     setActiveSection(section);
     if (section === 'models' || section === 'sessions') setMode(section);
-    saveDashboardLocation(provider, period, selectedDay, section);
+    saveDashboardLocation(provider, period, selectedDay, section, selectedEndDay);
     window.requestAnimationFrame(() => scrollDashboard(section));
   }
   function changeProvider(id: string) {
     setProvider(id);
-    saveDashboardLocation(id, period, selectedDay, activeSection);
+    saveDashboardLocation(id, period, selectedDay, activeSection, selectedEndDay);
   }
   function changePeriod(next: UsagePeriod) {
     if (next === period) return;
-    if (JSON.stringify(usageDateRange(next, selectedDay)) !== JSON.stringify(usageRange.current)) setScopeLoading(true);
+    if (JSON.stringify(usageDateRange(next, selectedDay, undefined, selectedEndDay)) !== JSON.stringify(usageRange.current)) setScopeLoading(true);
     setPeriod(next);
-    saveDashboardLocation(provider, next, selectedDay, activeSection);
+    saveDashboardLocation(provider, next, selectedDay, activeSection, selectedEndDay);
+  }
+  function changeCustomRange(from: string, to: string) {
+    const range = usageDateRange('custom', from, undefined, to);
+    if (!range) return;
+    if (JSON.stringify(range) !== JSON.stringify(usageRange.current)) setScopeLoading(true);
+    setSelectedDay(from); setSelectedEndDay(to); setPeriod('custom');
+    saveDashboardLocation(provider, 'custom', from, activeSection, to);
   }
   function changeDay(day: string) {
     if (day === selectedDay || !usageDateRange('day', day)) return;
-    if (JSON.stringify(usageDateRange(period, day)) !== JSON.stringify(usageRange.current)) setScopeLoading(true);
+    if (JSON.stringify(usageDateRange(period, day, undefined, selectedEndDay)) !== JSON.stringify(usageRange.current)) setScopeLoading(true);
     setSelectedDay(day);
-    saveDashboardLocation(provider, period, day, activeSection);
+    saveDashboardLocation(provider, period, day, activeSection, selectedEndDay);
   }
   useEffect(() => {
     const restore = () => {
       const next = readDashboardLocation();
-      if (JSON.stringify(usageDateRange(next.period, next.selectedDay)) !== JSON.stringify(usageRange.current)) setScopeLoading(true);
-      setProvider(next.provider); setPeriod(next.period); setSelectedDay(next.selectedDay);
+      if (JSON.stringify(usageDateRange(next.period, next.selectedDay, undefined, next.selectedEndDay)) !== JSON.stringify(usageRange.current)) setScopeLoading(true);
+      setProvider(next.provider); setPeriod(next.period); setSelectedDay(next.selectedDay); setSelectedEndDay(next.selectedEndDay);
       setActiveSection(next.section); setMode(next.mode);
       window.requestAnimationFrame(() => scrollDashboard(next.section, false));
     };
@@ -370,11 +380,11 @@ export default function App() {
     <div className="app">
       <a className="skip-link" href="#main-content">Skip to dashboard</a>
       <header className="dashboard-header">
-        <a className="brand" href="#overview" aria-label="TokenHub dashboard" onClick={(event) => { event.preventDefault(); navigate('overview'); }}><span className="brand__mark"><Icon name="layers" /></span><span>TokenHub</span></a>
+        <a className="brand" href="#overview" aria-label="TokenHub dashboard" onClick={(event) => { event.preventDefault(); navigate('overview'); }}><span className="brand__mark"><Icon name="chart" /></span><span>TokenHub</span></a>
         <nav className="dashboard-nav" aria-label="Dashboard sections">
           {(['overview', 'models', 'sessions', 'sources'] as const).map((section) => <a key={section} href={`#${section}`} aria-current={activeSection === section ? 'location' : undefined} onClick={(event) => { event.preventDefault(); navigate(section); }}>{section[0].toUpperCase() + section.slice(1)}</a>)}
         </nav>
-        <div className="header-tools"><button className={`sync-button${needsReview ? ' sync-button--warning' : ''}`} type="button" aria-label={`Sync details: ${syncLabel}`} aria-haspopup="dialog" onClick={() => setSyncOpen(true)}><span className="status-dot" /><span>{syncLabel}</span><Icon name="chevron" /></button><button className="theme-toggle" type="button" role="switch" aria-label="Dark mode" aria-checked={dark} title={dark ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => setDark(!dark)}><span aria-hidden="true">{dark ? '☾' : '☀'}</span></button></div>
+        <div className="header-tools"><RefreshAge timestamp={collection?.last_scan_at} /><span className="local-status"><span className="status-dot" />Stored on this device</span><button className={`sync-button${needsReview ? ' sync-button--warning' : ''}`} type="button" aria-label={`Sync details: ${syncLabel}`} aria-haspopup="dialog" onClick={() => setSyncOpen(true)}><span className="status-dot" /><span>{syncLabel}</span><Icon name="chevron" /></button><button className="theme-toggle" type="button" role="switch" aria-label="Dark mode" aria-checked={dark} title={dark ? 'Switch to light mode' : 'Switch to dark mode'} onClick={() => setDark(!dark)}><Icon name={dark ? 'sun' : 'moon'} /></button></div>
       </header>
       <main className="app__main" id="main-content" tabIndex={-1}>
         {error !== null && (usage === null || scopeLoading) ? <p className="notice notice--error" role="alert"><Icon name="info" />{error}<button type="button" className="button button--secondary" onClick={handleRefresh} disabled={actionsDisabled}>Refresh data</button></p> : null}
@@ -387,7 +397,7 @@ export default function App() {
         ) : null}
 
         <div hidden={activeSection === 'sources'}>
-          {usage !== null ? <UsageExplorer data={usage} accuracyNotice={usageAccuracyNotice(usage, collection, quality, error ?? metadataError, discovery)} period={period} selectedDay={selectedDay} onPeriodChange={changePeriod} onSelectedDayChange={changeDay} provider={provider} onProviderChange={changeProvider} mode={mode} onModeChange={(next) => { setMode(next); setActiveSection(next); saveDashboardLocation(provider, period, selectedDay, next); }} isLoading={scopeLoading} /> : null}
+          {usage !== null ? <UsageExplorer overview={activeSection === 'overview'} data={usage} accuracyNotice={usageAccuracyNotice(usage, collection, quality, error ?? metadataError, discovery)} period={period} selectedDay={selectedDay} selectedEndDay={selectedEndDay} onCustomRangeChange={changeCustomRange} onPeriodChange={changePeriod} onSelectedDayChange={changeDay} provider={provider} onProviderChange={changeProvider} mode={mode} onModeChange={(next) => { setMode(next); setActiveSection(next); saveDashboardLocation(provider, period, selectedDay, next, selectedEndDay); }} isLoading={scopeLoading} /> : null}
         </div>
 
         {discovery !== null ? (

@@ -111,7 +111,8 @@ class AnalyticsService:
         if provider:
             events = select(events).where(events.provider == provider).subquery().c
         full_events = events
-        full_sessions = self._session_query(full_events).order_by(None).subquery().c
+        full_session_rows = self._session_query(full_events).order_by(None).subquery()
+        full_sessions = full_session_rows.c
         if kind == "detail":
             events = select(events).where(self._key(events) == session_key).subquery().c
         if model is not None or unknown_model:
@@ -140,7 +141,7 @@ class AnalyticsService:
             metric = full_sessions.model_count
         page = select(filtered)
         if kind == "sessions" and (model is not None or unknown_model or sort == "model_count"):
-            page = page.join(full_sessions.table, (full_sessions.provider == fields.provider)
+            page = page.join(full_session_rows, (full_sessions.provider == fields.provider)
                 & (full_sessions.session_key == fields.session_key))
         page = page.order_by(metric.is_(None), metric.asc() if direction == "ascending" else metric.desc(),
                              identity, fields.provider).offset(offset).limit(limit)
@@ -152,9 +153,24 @@ class AnalyticsService:
                 full_rows = {(row["provider"], row["session_key"]): _project(row) for row in session.execute(
                     select(full_sessions).where(full_sessions.session_key.in_([row["session_key"] for row in items]))
                 ).mappings()} if items else {}
+                previews: dict[tuple[str, str], list[str | None]] = {}
+                if items:
+                    key = self._key(full_events)
+                    # Rank within each returned session, rather than issuing one
+                    # request per row or sending every model's counters eagerly.
+                    ranked = select(full_events.provider, key.label("session_key"), full_events.model_name,
+                        func.row_number().over(partition_by=(full_events.provider, key),
+                            order_by=(func.sum(full_events.input_total_tokens + full_events.output_total_tokens).desc(),
+                                      full_events.model_name)).label("rank"))\
+                        .where(key.in_([row["session_key"] for row in items]))\
+                        .group_by(full_events.provider, key, full_events.model_name).subquery()
+                    for preview in session.execute(select(ranked).where(ranked.c.rank <= 2)
+                                                   .order_by(ranked.c.rank)).mappings():
+                        previews.setdefault((preview["provider"], preview["session_key"]), []).append(preview["model_name"])
                 for index, row in enumerate(items):
                     full = full_rows[(row["provider"], row["session_key"])]
                     full["models"] = []  # Fetch model contributions only when expanded.
+                    full["model_preview"] = previews.get((row["provider"], row["session_key"]), [])
                     if model is not None or unknown_model:
                         full["contribution"] = row
                     items[index] = full

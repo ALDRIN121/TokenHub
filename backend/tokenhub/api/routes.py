@@ -306,7 +306,7 @@ def usage_trends(
     start: Annotated[datetime | None, Query(alias="from")] = None,
     end: Annotated[datetime | None, Query(alias="to")] = None,
     time_zone: Annotated[str, Query(max_length=100)] = "UTC",
-    granularity: Literal["day", "week"] = "day",
+    granularity: Literal["day", "week", "month"] = "day",
     provider: Literal["codex", "claude_code", "hermes", "vscode_copilot", "antigravity"] | None = None,
     model: Annotated[str | None, Query(max_length=200)] = None,
     unknown_model: bool = False,

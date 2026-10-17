@@ -9,6 +9,9 @@ def test_trends_api_reconciles_and_preserves_path_free_cached_views(client):
     assert result['breakdown']['items'][0]['provider'] == 'codex'
     assert 'canonical_path' not in str(result)
     assert 'sk-synthetic-secret' not in str(result)
+    monthly = client.get('/api/v1/usage/trends?granularity=month')
+    assert monthly.status_code == 200
+    assert monthly.json()['current']['workload_tokens'] == 125
 
 
 def test_trends_api_validates_calendar_bounds_timezones_and_limits(client):

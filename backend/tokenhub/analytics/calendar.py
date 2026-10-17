@@ -10,6 +10,8 @@ def midnight(day: date, zone: ZoneInfo) -> datetime:
 
 
 def bucket_date(day: date, granularity: str) -> date:
+    if granularity == "month":
+        return day.replace(day=1)
     return day - timedelta(days=day.weekday()) if granularity == "week" else day
 
 

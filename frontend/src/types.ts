@@ -148,6 +148,7 @@ export interface ModelUsage extends UsageTotals {
 export interface SessionUsage extends UsageTotals {
   provider: string;
   session_key: string;
+  model_preview?: (string | null)[];
   models: (UsageTotals & { model_name: string | null })[];
   contribution?: UsageTotals;
 }
@@ -173,10 +174,12 @@ export interface TrendBucket {
   from: string; to: string;
   previous_from: string | null; previous_to: string | null;
   current: TrendTotals; previous: TrendTotals | null;
+  /** Recorded provider contributions in this interval; absent on older servers. */
+  providers?: { provider: string; totals: TrendTotals }[];
 }
 export interface UsageTrendsResponse {
   period: { from: string | null; to: string | null; previous_from: string | null; previous_to: string | null;
-    days: number; time_zone: string; granularity: 'day' | 'week'; all_time: boolean; includes_today: boolean };
+    days: number; time_zone: string; granularity: 'day' | 'week' | 'month'; all_time: boolean; includes_today: boolean };
   current: TrendTotals; previous: TrendTotals | null;
   comparison: Record<TrendMetric, TrendChange>;
   buckets: TrendBucket[];

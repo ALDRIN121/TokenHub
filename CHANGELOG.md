@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.6 - 2026-10-18
+
+The dashboard has a refreshed top navigation layout, coordinated light/dark themes, a stacked agent-usage chart, clearer agent shares and compact session previews. Agent selection now includes bundled icons and full keyboard navigation. Custom inclusive date ranges, calendar-month grouping, visible plotted dates and sparse-data guidance make trends easier to interpret. Chart tooltips no longer move surrounding content, and the header shows the age of the last completed scan. Session rows preview recorded model names; model drilldowns correctly retain full-session totals. Subtle transitions respect reduced-motion preferences. See the [dashboard guide](docs/dashboard-guide.md) and [release notes](docs/releases/0.1.6.md).
+
 ## 0.1.5
 
 The usage-first dashboard adds a compact summary, authentic bundled agent icons, continuous models/sessions navigation, persistent agent scope, independent table contexts, and a header theme switch. Sync details move to an accessible drawer while source setup stays in Sources. Valid usage remains available during metadata failures; changing scope hides obsolete counters and rows. See [dashboard guide](docs/dashboard-guide.md) and [release notes](docs/releases/0.1.5.md).

@@ -1,6 +1,14 @@
 import type { CSSProperties } from 'react';
 
 const paths = {
+  chart: 'M5 14v6 M12 9v11 M19 4v16',
+  calendar: 'M8 2v4 M16 2v4 M3 9h18 M5 4h14a2 2 0 0 1 2 2v14H3V6a2 2 0 0 1 2-2z',
+  models: 'M12 3l9 5-9 5-9-5z M3 8v9l9 5 9-5V8 M12 13v9',
+  sessions: 'M6 2h8l5 5v15H5V2z M14 2v6h5 M8 12h8 M8 16h6',
+  sun: 'M12 2v2 M12 20v2 M2 12h2 M20 12h2 M5 5l1.5 1.5 M17.5 17.5L19 19 M5 19l1.5-1.5 M17.5 6.5L19 5 M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
+  moon: 'M20 15.5A9 9 0 0 1 8.5 4 9 9 0 1 0 20 15.5z',
+  close: 'M6 6l12 12 M18 6 6 18',
+  sliders: 'M4 7h7 M15 7h5 M4 17h3 M11 17h9 M11 4v6 M7 14v6',
   sort: 'M9 8l3-3 3 3 M9 16l3 3 3-3',
   sortAscending: 'M12 19V5 M7 10l5-5 5 5',
   search: 'M21 21l-5-5 M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',

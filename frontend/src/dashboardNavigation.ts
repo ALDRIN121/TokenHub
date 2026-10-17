@@ -3,26 +3,31 @@ import { agents } from './components/usageLabels';
 
 export type DashboardSection = 'overview' | 'models' | 'sessions' | 'sources';
 export type AnalysisMode = 'models' | 'sessions';
-const periods: UsagePeriod[] = ['all', 'today', 'yesterday', 'last7', 'last30', 'day'];
+const periods: UsagePeriod[] = ['all', 'today', 'yesterday', 'last7', 'last30', 'day', 'custom'];
 export function readDashboardLocation() {
   const url = new URL(window.location.href);
   const candidate = url.searchParams.get('agent') ?? 'all';
   const provider = agents.find((agent) => agent.id === candidate || agent.name.toLowerCase() === candidate.toLowerCase())?.id ?? 'all';
   const requestedPeriod = url.searchParams.get('period') ?? (url.searchParams.get('days') === '7' ? 'last7' : url.searchParams.get('days') === '30' ? 'last30' : 'all');
-  const period = periods.includes(requestedPeriod as UsagePeriod) ? requestedPeriod as UsagePeriod : 'all';
-  const requestedDay = url.searchParams.get('day') ?? '';
+  let period = periods.includes(requestedPeriod as UsagePeriod) ? requestedPeriod as UsagePeriod : 'all';
+  const requestedDay = url.searchParams.get(period === 'custom' ? 'from' : 'day') ?? '';
   const validDay = Boolean(usageDateRange('day', requestedDay));
   const selectedDay = validDay ? requestedDay : localDay(new Date());
+  const requestedEnd = url.searchParams.get('to') ?? selectedDay;
+  const selectedEndDay = usageDateRange('custom', selectedDay, undefined, requestedEnd) ? requestedEnd : selectedDay;
+  if (period === 'custom' && (!validDay || !usageDateRange('custom', requestedDay, undefined, requestedEnd))) period = 'all';
   const hash = url.hash.slice(1);
   const section: DashboardSection = hash === 'local-sources' || hash === 'sources' ? 'sources' : hash === 'models' ? 'models' : hash === 'sessions' || hash === 'analytics' ? 'sessions' : 'overview';
-  return { provider, period, selectedDay, section, mode: section === 'models' ? 'models' as const : 'sessions' as const };
+  return { provider, period, selectedDay, selectedEndDay, section, mode: section === 'models' ? 'models' as const : 'sessions' as const };
 }
-export function saveDashboardLocation(provider: string, period: UsagePeriod, selectedDay: string, section: DashboardSection) {
+export function saveDashboardLocation(provider: string, period: UsagePeriod, selectedDay: string, section: DashboardSection, selectedEndDay = selectedDay) {
   const url = new URL(window.location.href);
   url.searchParams.delete('days');
   url.searchParams.set('agent', provider);
   url.searchParams.set('period', period);
   if (period === 'day') url.searchParams.set('day', selectedDay); else url.searchParams.delete('day');
+  if (period === 'custom') { url.searchParams.set('from', selectedDay); url.searchParams.set('to', selectedEndDay); }
+  else { url.searchParams.delete('from'); url.searchParams.delete('to'); }
   url.hash = section;
   if (url.href !== window.location.href) window.history.pushState({}, '', url);
 }

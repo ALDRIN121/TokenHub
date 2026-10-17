@@ -1,5 +1,5 @@
 /** Calendar-day filters are converted in the browser's local time zone. */
-export type UsagePeriod = 'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'day';
+export type UsagePeriod = 'all' | 'today' | 'yesterday' | 'last7' | 'last30' | 'day' | 'custom';
 
 export function localDay(date: Date): string {
   const year = date.getFullYear();
@@ -8,8 +8,12 @@ export function localDay(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-export function usageDateRange(period: UsagePeriod, selectedDay: string, now = new Date()): { from: string; to: string } | undefined {
+export function usageDateRange(period: UsagePeriod, selectedDay: string, now = new Date(), endDay = selectedDay): { from: string; to: string } | undefined {
   if (period === 'all') return undefined;
+  if (period === 'custom') {
+    const first = usageDateRange('day', selectedDay, now), last = usageDateRange('day', endDay, now);
+    return first && last && first.from <= last.from ? { from: first.from, to: last.to } : undefined;
+  }
   let start: Date;
   let end: Date;
   if (period === 'day') {

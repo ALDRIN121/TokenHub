@@ -175,8 +175,9 @@ quality; the header sync drawer contains operational progress and refresh.
 The header theme switch saves your light/dark preference locally.
 
 **Usage trends** shares the explorer's date, agent, and selected-model filters.
-Switch between daily totals and Monday-based weeks, and select total, input,
-output, cache, or reasoning tokens. Hover or focus a chart bar for exact counts,
+Choose a preset or custom inclusive date range, then group totals by day,
+Monday-based week or calendar month. Select total, input, output, cache, or
+reasoning tokens. Hover or focus a chart interval for exact counts,
 or open **View chart data**. **Compare agents** and **Compare models** show the
 same recorded counters by group; model comparisons use pages of 25 and include
 models used only in the previous period and models with missing names.
@@ -190,11 +191,11 @@ Ranges including today are marked as still in progress. Higher/lower usage is
 descriptive, not a claim of better/worse efficiency.
 
 `GET /api/v1/usage/trends` accepts `from`, `to`, `time_zone` (an IANA zone, default
-UTC), `granularity=day|week`, `provider`, `model` or `unknown_model=true`, and
+UTC), `granularity=day|week|month`, `provider`, `model` or `unknown_model=true`, and
 `dimension=providers|models` with bounded `offset`/`limit`. Date bounds must
 include both local calendar-day boundaries. The same globally canonical delta
-events drive period totals, buckets and group comparisons. Daily/weekly charts
-are limited to 366/260 points; longer histories keep exact totals and request a
+events drive period totals, buckets and group comparisons. Daily/weekly/monthly charts
+are limited to 366/260/120 points; longer histories keep exact totals and request a
 shorter date range. Cached responses refresh when imported data changes.
 
 `GET /api/v1/usage` returns canonical totals plus agent, model, and session

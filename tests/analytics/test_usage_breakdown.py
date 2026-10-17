@@ -153,3 +153,33 @@ def test_model_name_pages_preserve_numeric_sorting_and_unknowns_last(app_service
     ], SyncCursor('a', 0, None, 'test'))
     result = app_services.analytics.usage_page('models', sort='identity', direction='ascending')
     assert [row['model_name'] for row in result['items']] == ['model-2', 'model-10', None]
+
+
+def test_session_drilldowns_join_full_session_counts_and_keep_model_contributions(app_services):
+    app_services.usage_repository.persist_scan([
+        event('a', 'one', 'model-a', 'shared'), event('a', 'two', 'model-b', 'shared'),
+        event('a', 'unknown', None, 'unknown'),
+    ], SyncCursor('a', 0, None, 'test'))
+    selected = app_services.analytics.usage_page('sessions', model='model-a')['items'][0]
+    assert selected['model_count'] == 2
+    assert selected['workload_tokens'] == 250
+    assert selected['contribution']['workload_tokens'] == 125
+    unknown = app_services.analytics.usage_page('sessions', unknown_model=True)['items'][0]
+    assert unknown['contribution']['workload_tokens'] == 125
+    ordered = app_services.analytics.usage_page('sessions', sort='model_count')['items']
+    assert [row['model_count'] for row in ordered] == [2, 0]
+
+
+def test_session_pages_include_bounded_model_name_previews(app_services):
+    app_services.usage_repository.persist_scan([
+        replace(event('a', 'one', 'highest', 'shared'), input_total_tokens=300),
+        replace(event('a', 'two', 'second', 'shared'), input_total_tokens=200),
+        event('a', 'three', 'third', 'shared'), event('a', 'four', None, 'other'),
+    ], SyncCursor('a', 0, None, 'test'))
+    result = app_services.analytics.usage_page('sessions', limit=1)
+    assert result['items'][0]['model_preview'] == ['highest', 'second']
+    assert result['items'][0]['models'] == []
+    filtered = app_services.analytics.usage_page('sessions', model='third')
+    assert filtered['items'][0]['model_preview'] == ['highest', 'second']
+    unknown = app_services.analytics.usage_page('sessions', unknown_model=True)
+    assert unknown['items'][0]['model_preview'] == [None]

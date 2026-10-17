@@ -47,6 +47,28 @@ def test_daily_trends_and_breakdowns_reconcile_with_period_totals(app_services):
     assert "old-a" not in str(result)
 
 
+def test_bucket_provider_layers_reconcile_and_follow_filters(app_services):
+    seed(app_services, [
+        event("a", "claude", "model-a", "one"),
+        replace(event("a", "codex", "model-b", "two"), connector_id="codex-local", provider=Provider.CODEX),
+    ])
+    result = app_services.analytics.usage_trends(granularity="week")
+    for bucket in result["buckets"]:
+        assert sum(layer["totals"]["workload_tokens"] or 0 for layer in bucket["providers"]) == (bucket["current"]["workload_tokens"] or 0)
+    assert {layer["provider"] for layer in result["buckets"][0]["providers"]} == {"claude_code", "codex"}
+    filtered = app_services.analytics.usage_trends(provider="codex", model="model-b")
+    assert [layer["provider"] for layer in filtered["buckets"][0]["providers"]] == ["codex"]
+
+
+def test_provider_layers_retain_missing_counters_and_empty_intervals(app_services):
+    seed(app_services, [replace(event("a", "partial", "m", "one"), input_total_tokens=None)])
+    result = app_services.analytics.usage_trends(start=stamp("2026-09-27T00:00Z"), end=stamp("2026-09-29T00:00Z"))
+    layer = result["buckets"][0]["providers"][0]["totals"]
+    assert layer["workload_tokens"] is None
+    assert layer["reported_counts"]["workload_tokens"] == 0
+    assert result["buckets"][1]["providers"] == []
+
+
 def test_monday_weeks_clip_edges_and_align_previous_intervals(app_services):
     history(app_services)
     result = app_services.analytics.usage_trends(start=stamp("2026-09-27T00:00Z"), end=stamp("2026-10-04T00:00Z"), granularity="week")
@@ -55,6 +77,33 @@ def test_monday_weeks_clip_edges_and_align_previous_intervals(app_services):
     assert [row["current"]["workload_tokens"] for row in result["buckets"]] == [125, 325]
     assert [row["previous"]["workload_tokens"] for row in result["buckets"]] == [15, 125]
     assert result["buckets"][1]["previous_from"] == "2026-09-21"
+
+
+def test_monthly_buckets_clip_calendar_edges_and_keep_the_same_totals(app_services):
+    seed(app_services, [replace(event("a", str(i), "m", str(i)), timestamp=stamp(value)) for i, value in enumerate([
+        "2025-11-30T12:00Z", "2025-12-29T12:00Z",
+        "2025-12-31T12:00Z", "2026-01-01T12:00Z", "2026-01-31T12:00Z", "2026-02-01T12:00Z",
+    ])])
+    options = {"start": stamp("2025-12-30T00:00Z"), "end": stamp("2026-02-02T00:00Z")}
+    monthly = app_services.analytics.usage_trends(**options, granularity="month")
+    assert [b["from"] for b in monthly["buckets"]] == ["2025-12-30", "2026-01-01", "2026-02-01"]
+    assert [b["to"] for b in monthly["buckets"]] == ["2026-01-01", "2026-02-01", "2026-02-02"]
+    assert [b["current"]["workload_tokens"] for b in monthly["buckets"]] == [125, 250, 125]
+    for grouping in ("day", "week", "month"):
+        result = app_services.analytics.usage_trends(**options, granularity=grouping)
+        assert sum(b["current"]["workload_tokens"] or 0 for b in result["buckets"]) == 500
+        assert result["current"] == monthly["current"]
+        assert result["previous"]["workload_tokens"] == 250
+        assert sum(b["previous"]["workload_tokens"] or 0 for b in result["buckets"]) == (result["previous"]["workload_tokens"] or 0)
+
+
+def test_monthly_buckets_include_leap_day_and_obey_time_zone(app_services):
+    seed(app_services, [replace(event("a", str(i), "m", str(i)), timestamp=stamp(value)) for i, value in enumerate([
+        "2024-02-28T23:30Z", "2024-02-29T23:30Z", "2024-03-01T00:00Z",
+    ])])
+    result = app_services.analytics.usage_trends(start=stamp("2024-02-27T18:30Z"), end=stamp("2024-03-01T18:30Z"),
+        time_zone="Asia/Kolkata", granularity="month")
+    assert [b["current"]["workload_tokens"] for b in result["buckets"]] == [125, 250]
 
 
 def test_dst_comparison_uses_calendar_days_and_exclusive_end(app_services):

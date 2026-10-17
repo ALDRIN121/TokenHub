@@ -3,13 +3,16 @@ import type { ModelUsage, SessionUsage, UsageBreakdown, UsageTotals } from '../t
 import { formatMetric, MetricCard } from './MetricCard';
 import { AgentIcon } from './AgentIcon';
 import { Icon } from './Icon';
+import { AgentPicker } from './AgentPicker';
+import { DateRangeControl } from './DateRangeControl';
+import { scrollDashboard } from '../dashboardNavigation';
 import { usageDateRange, type UsagePeriod } from '../dateRange';
 import { getUsagePage, getSessionModels } from '../api/client';
 import { UsageComposition } from './UsageComposition';
 import { UsageTrends } from './UsageTrends';
 import { agents, agentName, modelName } from './usageLabels';
 
-const percent = (value: number | null, total: number | null) => value === null || total === null || total === 0 ? '—' : `${(value / total * 100).toFixed(1)}%`;
+const percent = (value: number | null, total: number | null) => value === null || total === null || total === 0 ? '—' : value > 0 && value / total * 100 < .1 ? '<0.1%' : `${(value / total * 100).toFixed(1)}%`;
 const full = (value: number | null) => value === null ? 'Not reported' : value.toLocaleString('en-US');
 const date = (value: string | null) => value ? new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(value)) : 'Not reported';
 type MetricSortKey = 'workload_tokens' | 'input_total_tokens' | 'output_total_tokens' | 'cache_read_tokens' | 'cache_write_tokens' | 'reasoning_tokens' | 'session_count' | 'model_count';
@@ -39,7 +42,8 @@ function SortIndicator({ active, direction }: { active: boolean; direction: Sort
   return <Icon name={active ? 'sortAscending' : 'sort'} className={`table-sort-icon${active && direction === 'descending' ? ' table-sort-icon--descending' : ''}`} />;
 }
 
-function TokenHeaders({ mode, sort, direction, onSort }: {
+function TokenHeaders({ mode, sort, direction, onSort, compact = false }: {
+  compact?: boolean;
   mode: 'models' | 'sessions'; sort: SortKey; direction: SortDirection; onSort: (key: SortKey) => void;
 }) {
   const columns: [SortKey, string][] = [
@@ -49,6 +53,7 @@ function TokenHeaders({ mode, sort, direction, onSort }: {
     ['cache_write_tokens', 'Cache write'], ['reasoning_tokens', 'Reasoning'],
     [mode === 'models' ? 'session_count' : 'model_count', mode === 'models' ? 'Sessions' : 'Models'],
   ];
+  if (compact) return <tr><th scope="col">Session</th><th scope="col">Agent</th><th scope="col">Models</th><th scope="col">Tokens</th><th scope="col">Last usage</th></tr>;
   return <tr>{columns.map(([key, label]) => {
     const active = sort === key;
     const nextDirection = active ? (direction === 'ascending' ? 'descending' : 'ascending') : (key === 'identity' ? 'ascending' : 'descending');
@@ -60,20 +65,23 @@ function TokenHeaders({ mode, sort, direction, onSort }: {
   })}</tr>;
 }
 
-export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriodChange, onSelectedDayChange, accuracyNotice, provider: controlledProvider, onProviderChange, mode: controlledMode, onModeChange, isLoading = false }: {
+export function UsageExplorer({ data, period = 'all', selectedDay = '', selectedEndDay = selectedDay, onCustomRangeChange, onPeriodChange, onSelectedDayChange, accuracyNotice, provider: controlledProvider, onProviderChange, mode: controlledMode, onModeChange, isLoading = false, overview = false }: {
   data: UsageBreakdown;
+  overview?: boolean;
   provider?: string; onProviderChange?: (id: string) => void;
   mode?: 'models' | 'sessions'; onModeChange?: (mode: 'models' | 'sessions') => void;
   isLoading?: boolean;
   accuracyNotice?: { messages: string[]; warning: boolean };
   period?: UsagePeriod;
-  selectedDay?: string;
+  selectedDay?: string; selectedEndDay?: string;
+  onCustomRangeChange?: (from: string, to: string) => void;
   onPeriodChange?: (period: UsagePeriod) => void;
   onSelectedDayChange?: (day: string) => void;
 }) {
+  const [allCounters, setAllCounters] = useState(false);
   const accuracyDetails = useRef<HTMLDetailsElement>(null);
   const chipStrip = useRef<HTMLDivElement>(null);
-  const dateLabel = ({ all: 'All time', today: 'Today', yesterday: 'Yesterday', last7: 'Last 7 days', last30: 'Last 30 days', day: selectedDay || 'Choose a date' })[period];
+  const dateLabel = ({ all: 'All time', today: 'Today', yesterday: 'Yesterday', last7: 'Last 7 days', last30: 'Last 30 days', day: selectedDay || 'Choose a date', custom: `${selectedDay} – ${selectedEndDay}` })[period];
   const [internalProvider, setInternalProvider] = useState('all');
   const [internalMode, setInternalMode] = useState<'models' | 'sessions'>('models');
   const provider = controlledProvider ?? internalProvider;
@@ -87,6 +95,7 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
     }
   }, [provider]);
   const mode = controlledMode ?? internalMode;
+  const compactSessions = overview && mode === 'sessions' && !allCounters;
   const setProvider = (id: string) => { setInternalProvider(id); onProviderChange?.(id); };
   const setMode = (next: 'models' | 'sessions') => { setInternalMode(next); onModeChange?.(next); };
   const initialContext = () => ({ query: '', sort: 'workload_tokens' as SortKey, direction: 'descending' as SortDirection, limit: 25, offset: 0 });
@@ -104,23 +113,23 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
   useEffect(() => { if (controlledMode === 'models') setSelected(null); }, [controlledMode]);
   const [selectedSummary, setSelectedSummary] = useState<ModelUsage | null>(null);
   const [selectedSummaryScope, setSelectedSummaryScope] = useState('');
-  const modelScope = (row: ModelUsage) => JSON.stringify([period, selectedDay, data.data_version, row.provider, row.model_name]);
+  const modelScope = (row: ModelUsage) => JSON.stringify([period, selectedDay, selectedEndDay, data.data_version, row.provider, row.model_name]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [page, setPage] = useState<{ items: (ModelUsage | SessionUsage)[]; total: number; mode: 'models' | 'sessions'; key?: string }>({ items: [], total: 0, mode: 'models' });
   const [pageLoading, setPageLoading] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const remote = data.paging === true;
-  const range = usageDateRange(period, selectedDay);
+  const range = usageDateRange(period, selectedDay, undefined, selectedEndDay);
   const options = useMemo(() => ({
-    ...usageDateRange(period, selectedDay),
+    ...usageDateRange(period, selectedDay, undefined, selectedEndDay),
     ...(provider === 'all' ? {} : { provider }), q: query.trim(), sort, direction,
     ...(selected ? { provider: selected.provider, ...(selected.model_name === null ? { unknown_model: 'true' } : { model: selected.model_name }) } : {}),
     offset: String(offset),
-  }), [period, selectedDay, provider, query, sort, direction, selected, offset]);
+  }), [period, selectedDay, selectedEndDay, provider, query, sort, direction, selected, offset]);
   const pageKey = JSON.stringify({ mode, options, version: data.data_version });
   const validPage = page.key === pageKey && !isLoading;
-  useEffect(() => { setContexts({ models: initialContext(), sessions: initialContext() }); setSelected(null); setExpanded(null); }, [period, selectedDay, provider]);
+  useEffect(() => { setContexts({ models: initialContext(), sessions: initialContext() }); setSelected(null); setExpanded(null); }, [period, selectedDay, selectedEndDay, provider]);
   useEffect(() => {
     if (!remote) return;
     const controller = new AbortController();
@@ -139,12 +148,12 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
   useEffect(() => {
     if (!remote || !selectedProvider || selectedName === undefined) return;
     const controller = new AbortController();
-    getUsagePage('models', { ...usageDateRange(period, selectedDay), provider: selectedProvider,
+    getUsagePage('models', { ...usageDateRange(period, selectedDay, undefined, selectedEndDay), provider: selectedProvider,
       ...(selectedName === null ? { unknown_model: 'true' } : { model: selectedName }) }, controller.signal)
-      .then((result) => { if (!controller.signal.aborted) { setSelectedSummary(result.items[0] as ModelUsage ?? null); setSelectedSummaryScope(JSON.stringify([period, selectedDay, data.data_version, selectedProvider, selectedName])); } })
+      .then((result) => { if (!controller.signal.aborted) { setSelectedSummary(result.items[0] as ModelUsage ?? null); setSelectedSummaryScope(JSON.stringify([period, selectedDay, selectedEndDay, data.data_version, selectedProvider, selectedName])); } })
       .catch(() => { if (!controller.signal.aborted) setPageError('Could not update this model summary. Try refreshing data.'); });
     return () => controller.abort();
-  }, [remote, selectedProvider, selectedName, period, selectedDay, data.data_version]);
+  }, [remote, selectedProvider, selectedName, period, selectedDay, selectedEndDay, data.data_version]);
   const summary = isLoading ? undefined : provider === 'all' ? data.totals : data.providers.find((row) => row.provider === provider);
   const selectedModel = selected ? remote ? selectedSummaryScope === modelScope(selected) ? selectedSummary : null : data.models.find((row) => row.provider === selected.provider && row.model_name === selected.model_name) : null;
   const search = query.trim().toLowerCase();
@@ -203,29 +212,26 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
   ];
 
   return <section id="overview" className="usage-explorer panel" aria-labelledby="explorer-heading">
-    <div className="explorer-heading"><div><span className="eyebrow">THE TOKEN LEDGER</span><h2 id="explorer-heading">Your token hub.</h2><p>See where your tokens go. Explore recorded usage across your local coding agents.</p></div><div className="date-filters"><label>Agent<select aria-label="Agent" value={provider} onChange={event => chooseAgent(event.target.value)}><option value="all">All agents</option>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></label><label>Date range<select aria-label="Date range" value={period} onChange={(event) => onPeriodChange?.(event.target.value as UsagePeriod)}><option value="all">All time</option><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="last7">Last 7 days</option><option value="last30">Last 30 days</option><option value="day">Choose a date</option></select></label>{period === 'day' ? <label>Usage date<input aria-label="Usage date" type="date" value={selectedDay} onChange={(event) => onSelectedDayChange?.(event.target.value)} /></label> : null}</div></div>
-    <div className="section-heading"><h3>Token summary</h3><span className="section-meta">Selected date and agent</span></div>
+    <div className="explorer-heading"><div><h2 id="explorer-heading">Usage overview</h2><p>See how your coding agents use tokens.</p></div><div className="date-filters"><AgentPicker value={provider} onChange={chooseAgent} /><DateRangeControl period={period} selectedDay={selectedDay} selectedEndDay={selectedEndDay} onPeriodChange={onPeriodChange} onSelectedDayChange={onSelectedDayChange} onCustomRangeChange={onCustomRangeChange} />{accuracyNotice?.warning ? <button type="button" className="coverage-indicator" onClick={() => { if (accuracyDetails.current) { accuracyDetails.current.open = true; accuracyDetails.current.scrollIntoView?.({ behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center' }); } }}><span className="status-dot" />Review coverage<Icon name="chevron" /></button> : null}</div></div>
+    <div className="analytics-card">
+    <h3 className="sr-only">Token summary</h3>
     <dl className="metric-grid">
-      <div className="workload-summary"><MetricCard label="Workload tokens" value={visibleSummary?.workload_tokens ?? null} icon="layers" note="Complete input + output records" featured />{accuracyNotice?.warning ? <button type="button" className="coverage-indicator" onClick={() => { if (accuracyDetails.current) accuracyDetails.current.open = true; }}>Coverage · review</button> : null}</div>
+      <MetricCard label="Workload tokens" value={visibleSummary?.workload_tokens ?? null} icon="chart" note="Input + output" featured />
       <MetricCard label="Input tokens" value={visibleSummary?.input_total_tokens ?? null} icon="input" note="Includes cached input" />
       <MetricCard label="Output tokens" value={visibleSummary?.output_total_tokens ?? null} icon="output" note="Includes reasoning" />
-      <MetricCard label="Activity" value={visibleSummary?.session_count ?? null} icon="sources" note="Recorded sessions" />
+      <MetricCard label="Sessions" value={visibleSummary?.session_count ?? null} icon="sessions" />
+      <MetricCard label="Models" value={visibleSummary?.model_count ?? null} icon="models" />
     </dl>
-    <div className="usage-overview-grid"><div className="agent-ranking-panel"><div className="section-heading"><h3>Agent breakdown</h3></div><p className="agent-ranking-description">Shares across all agents in selected period</p><div className="agent-filters" aria-label="Filter by agent">
-      <button className="agent-filter agent-filter--all" type="button" aria-pressed={provider === 'all'} onClick={() => chooseAgent('all')} aria-label="Show all agents">
-        <span className="agent-filter__name"><Icon name="layers" />All agents</span>
-      </button>
-      {[...agents].sort((a, b) => compareCounts(data.providers.find(row => row.provider === a.id)?.workload_tokens ?? null, data.providers.find(row => row.provider === b.id)?.workload_tokens ?? null, 'descending')).map((agent) => {
-        const row = isLoading ? undefined : data.providers.find((item) => item.provider === agent.id);
-        const share = data.totals.workload_tokens ? (row?.workload_tokens ?? 0) / data.totals.workload_tokens * 100 : 0;
+    {range || data.totals.event_count > 0 ? <UsageTrends compact range={range} provider={selected?.provider ?? (provider === 'all' ? undefined : provider)} model={selected?.model_name ?? undefined} unknownModel={selected?.model_name === null} version={data.data_version} isLoading={isLoading} /> : <div className="chart-empty"><Icon name="chart" /><h3>Your usage, over time</h3><p>Connect a local source to see your recorded activity here.</p><a className="button button--primary" href="#local-sources">Connect a source<Icon name="arrow" /></a></div>}
+    <div className="agent-ranking-panel"><div className="agent-legend-heading"><h3>Agent breakdown</h3><button className="reset-agent" type="button" aria-pressed={provider === 'all'} onClick={() => chooseAgent('all')} aria-label="Show all agents"><Icon name="layers" />All agents{provider !== 'all' ? <Icon name="close" /> : null}</button></div><div className="agent-filters" aria-label="Filter by agent">
+      {[...agents].sort((a, b) => compareCounts(data.providers.find(row => row.provider === a.id)?.workload_tokens ?? null, data.providers.find(row => row.provider === b.id)?.workload_tokens ?? null, 'descending')).map(agent => {
+        const row = isLoading ? undefined : data.providers.find(item => item.provider === agent.id);
         return <button key={agent.id} type="button" className={`agent-filter agent-color--${agent.id}`} aria-pressed={provider === agent.id} onClick={() => chooseAgent(agent.id)} aria-label={`Filter by ${agent.name}`}>
-          <span className="agent-filter__name"><AgentIcon provider={agent.id} />{agent.name}{row && <span className="agent-filter__share">{percent(row.workload_tokens, data.totals.workload_tokens)}</span>}</span>
-          <strong title={full(row?.workload_tokens ?? null)}>{formatMetric(row?.workload_tokens)}<small>tokens</small></strong><span className="agent-filter__detail">{row?.session_count ?? '—'} sessions · {row?.model_count ?? '—'} models</span><span className="agent-filter__bar"><span style={{ width: `${share}%` }} /></span>
+          <span className="agent-filter__name"><span className="agent-identity"><AgentIcon provider={agent.id} /><i /></span><span className="agent-filter__title">{agent.id === 'vscode_copilot' ? 'Copilot' : agent.id === 'hermes' ? 'Hermes' : agent.name}</span><Icon name="chevron" /></span>
+          <strong title={full(row?.workload_tokens ?? null)}>{formatMetric(row?.workload_tokens)}<small> tokens</small></strong><span className="agent-filter__share">{percent(row?.workload_tokens ?? null, isLoading ? null : data.totals.workload_tokens)}<span className="sr-only"> of all agent tokens</span></span>
         </button>;
       })}
-    </div>
-    </div>
-    {range || data.totals.event_count > 0 ? <UsageTrends compact range={range} provider={selected?.provider ?? (provider === 'all' ? undefined : provider)} model={selected?.model_name ?? undefined} unknownModel={selected?.model_name === null} version={data.data_version} isLoading={isLoading} /> : <div className="usage-trends"><h3>Usage trends</h3><p>Import usage to see your recorded activity.</p></div>}
+    </div></div>
     </div>
     <details ref={accuracyDetails} className="usage-advanced"><summary>Counter details and accuracy</summary>
     {accuracyNotice ? <div className={`usage-accuracy notice${accuracyNotice.warning ? ' notice--warning' : ''}`} role="note" aria-label="Usage freshness and completeness"><Icon name="info" /><div>{accuracyNotice.messages.map((message) => <p key={message}>{message}</p>)}</div></div> : null}
@@ -237,7 +243,8 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
     </dl>
     <div className="overview-details"><UsageComposition dashboard={visibleSummary ?? { ...data.totals, workload_tokens: null, input_total_tokens: null, output_total_tokens: null, event_count: 0 }} /><aside className="privacy-card" id="privacy-note"><span className="privacy-card__icon"><Icon name="shield" /></span><h3>Your data stays yours.</h3><p>TokenHub parses approved local usage sources and retains only usage metadata. Prompts, transcripts, credentials, and provider accounts are never stored or sent anywhere.</p><span><Icon name="check" />No data leaves this machine</span></aside></div>
     </details>
-    <section id="analytics" className="analysis-workspace" aria-label="Usage analysis">
+    <section id="analytics" className={`analysis-workspace${compactSessions ? ' analysis-workspace--overview' : ''}`} aria-label="Usage analysis">
+    <div className="analysis-heading"><div><Icon name={mode === 'models' ? 'models' : 'sessions'} /><h3>{mode === 'models' ? 'Model usage' : 'Sessions'}</h3><span className="analysis-count">{mode === 'models' ? modelGroups : visibleSummary?.session_count ?? '—'}</span></div>{overview && mode === 'sessions' ? <button className="text-button" type="button" onClick={() => setAllCounters(!allCounters)} aria-pressed={allCounters}><Icon name="sliders" />{allCounters ? 'Compact view' : 'Detailed counters'}</button> : null}</div>
     <div className="analysis-context"><div className="ledger-tabs" role="tablist" aria-label="Usage grouping" onKeyDown={event => {
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
@@ -260,19 +267,19 @@ export function UsageExplorer({ data, period = 'all', selectedDay = '', onPeriod
             <td className="model-cell"><div className="model-cell__top"><span className="model-rank">{String(index + (remote ? offset : 0) + 1).padStart(2, '0')}</span><button type="button" className="model-link" aria-label={`View sessions for ${modelName(row.model_name)} in ${agentName(row.provider)}`} onClick={() => drillInto(row)}>{modelName(row.model_name)}<Icon name="arrow" /></button></div><div className="model-cell__meta"><span className="agent-label"><i />{agentName(row.provider)}</span><span>{percent(row.workload_tokens, summary?.workload_tokens ?? null)} of tokens</span>{row.attribution === 'session' ? <span className="attribution-note">Session-reported</span> : null}</div><div className="model-usage-bar" aria-hidden="true"><span style={{ width: `${largest ? (row.workload_tokens ?? 0) / largest * 100 : 0}%` }} /></div></td>
             <Counters row={row} /><td className="usage-number">{row.session_count}</td>
           </tr>)}
-        </tbody></table> : <table className="ledger-table" aria-label="Session usage"><thead><TokenHeaders mode="sessions" sort={sort} direction={direction} onSort={changeSort} /></thead><tbody>
-          {sessions.slice(0, remote ? 25 : limit).map(({ row, metrics }) => <SessionRow remote={remote} version={data.data_version} range={usageDateRange(period, selectedDay)} key={`${row.provider}:${row.session_key}`} row={row} metrics={metrics} expanded={expanded === row.session_key} toggle={() => setExpanded(expanded === row.session_key ? null : row.session_key)} selected={selected?.model_name} />)}
+        </tbody></table> : <table className="ledger-table" aria-label="Session usage"><thead><TokenHeaders compact={compactSessions} mode="sessions" sort={sort} direction={direction} onSort={changeSort} /></thead><tbody>
+          {sessions.slice(0, compactSessions ? 5 : remote ? 25 : limit).map(({ row, metrics }) => <SessionRow compact={compactSessions} remote={remote} version={data.data_version} range={usageDateRange(period, selectedDay, undefined, selectedEndDay)} key={`${row.provider}:${row.session_key}`} row={row} metrics={metrics} expanded={expanded === row.session_key} toggle={() => setExpanded(expanded === row.session_key ? null : row.session_key)} selected={selected?.model_name} />)}
         </tbody></table>}
         {!isLoading && !pageError && (!remote || validPage && !pageLoading) && (mode === 'models' ? models.length : sessions.length) === 0 ? <div className="ledger-no-results"><h3>{query ? 'No usage matches your search' : 'No imported usage for this agent'}</h3><p>{query ? 'Try another model name or session identifier.' : 'Approve its local sources to start collecting usage.'}</p>{query ? <button type="button" className="button button--secondary" onClick={() => setQuery('')}>Clear search</button> : <a href="#local-sources">View local sources</a>}</div> : null}
       </div>
-      {remote ? <div className="ledger-bottom"><span>Showing {(validPage ? page.total : 0) ? offset + 1 : 0}–{Math.min(offset + 25, (validPage ? page.total : 0))} of {(validPage ? page.total : 0)} {mode}</span><div className="page-controls"><button type="button" className="button button--secondary" disabled={pageLoading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous page</button><button type="button" className="button button--secondary" disabled={pageLoading || offset + 25 >= (validPage ? page.total : 0)} onClick={() => { setOffset(offset + 25); setExpanded(null); }}>Next page</button></div></div> : <div className="ledger-bottom"><span>Showing {Math.min(limit, mode === 'models' ? models.length : sessions.length)} of {mode === 'models' ? models.length : sessions.length} {mode}</span>{(mode === 'models' ? models.length : sessions.length) > limit ? <button type="button" className="button button--secondary" onClick={() => setLimit(limit + 25)}>Show 25 more</button> : <span>Hover a count for the exact number.</span>}</div>}
-      <div className="ledger-notes"><p><Icon name="info" /><span>Total = input + output. Cache is included in input; reasoning is included in output. Unknown values appear as —.{visibleSummary?.incomplete_event_count ? ` ${visibleSummary.incomplete_event_count} records have incomplete input or output; totals include complete records only.` : ''}</span></p>{(provider === 'all' || provider === 'vscode_copilot') && data.providers.some((row) => row.provider === 'vscode_copilot') ? <p><Icon name="copilot" /><span>Copilot Chat totals include only saved requests with token counters. Inline suggestions and requests without counters are not included.</span></p> : null}{(provider === 'all' || provider === 'antigravity') && data.providers.some((row) => row.provider === 'antigravity') ? <p><Icon name="quality" /><span>Antigravity usage comes from saved conversation counters. Unrecognized generations are excluded rather than estimated.</span></p> : null}{unknownModels > 0 ? <p><Icon name="quality" /><span>{unknownModels.toLocaleString('en-US')} records have no recorded model. Their tokens remain in “Model not recorded”.</span></p> : null}</div>
+      {compactSessions ? <div className="ledger-bottom"><span>Top {Math.min(5, sessions.length)} sessions by {sortLabels.find(([key]) => key === sort)?.[1].toLowerCase()}</span><button type="button" className="text-button" onClick={() => { setAllCounters(true); switchMode('sessions'); window.requestAnimationFrame(() => scrollDashboard('sessions')); }}>View all sessions<Icon name="arrow" /></button></div> : remote ? <div className="ledger-bottom"><span>Showing {(validPage ? page.total : 0) ? offset + 1 : 0}–{Math.min(offset + 25, (validPage ? page.total : 0))} of {(validPage ? page.total : 0)} {mode}</span><div className="page-controls"><button type="button" className="button button--secondary" disabled={pageLoading || offset === 0} onClick={() => setOffset(Math.max(0, offset - 25))}>Previous page</button><button type="button" className="button button--secondary" disabled={pageLoading || offset + 25 >= (validPage ? page.total : 0)} onClick={() => { setOffset(offset + 25); setExpanded(null); }}>Next page</button></div></div> : <div className="ledger-bottom"><span>Showing {Math.min(limit, mode === 'models' ? models.length : sessions.length)} of {mode === 'models' ? models.length : sessions.length} {mode}</span>{(mode === 'models' ? models.length : sessions.length) > limit ? <button type="button" className="button button--secondary" onClick={() => setLimit(limit + 25)}>Show 25 more</button> : <span>Hover a count for the exact number.</span>}</div>}
+      <details className="ledger-notes"><summary>About these counts</summary><p><Icon name="info" /><span>Total = input + output. Cache is included in input; reasoning is included in output. Unknown values appear as —.{visibleSummary?.incomplete_event_count ? ` ${visibleSummary.incomplete_event_count} records have incomplete input or output; totals include complete records only.` : ''}</span></p>{(provider === 'all' || provider === 'vscode_copilot') && data.providers.some((row) => row.provider === 'vscode_copilot') ? <p><Icon name="copilot" /><span>Copilot Chat totals include only saved requests with token counters. Inline suggestions and requests without counters are not included.</span></p> : null}{(provider === 'all' || provider === 'antigravity') && data.providers.some((row) => row.provider === 'antigravity') ? <p><Icon name="quality" /><span>Antigravity usage comes from saved conversation counters. Unrecognized generations are excluded rather than estimated.</span></p> : null}{unknownModels > 0 ? <p><Icon name="quality" /><span>{unknownModels.toLocaleString('en-US')} records have no recorded model. Their tokens remain in “Model not recorded”.</span></p> : null}</details>
     </>}
     </section>
   </section>;
 }
 
-function SessionRow({ row, metrics, expanded, toggle, selected, remote = false, range, version }: { remote?: boolean; range?: { from: string; to: string }; version?: number; row: SessionUsage; metrics: UsageTotals; expanded: boolean; toggle: () => void; selected: string | null | undefined }) {
+function SessionRow({ row, metrics, expanded, toggle, selected, remote = false, range, version, compact = false }: { compact?: boolean; remote?: boolean; range?: { from: string; to: string }; version?: number; row: SessionUsage; metrics: UsageTotals; expanded: boolean; toggle: () => void; selected: string | null | undefined }) {
   const [detail, setDetail] = useState<{ items: ModelUsage[]; total: number } | null>(null);
   const [detailOffset, setDetailOffset] = useState(0);
   const [detailError, setDetailError] = useState(false);
@@ -294,8 +301,11 @@ function SessionRow({ row, metrics, expanded, toggle, selected, remote = false, 
       .finally(() => { if (!controller.signal.aborted) setDetailLoading(false); });
     return () => controller.abort();
   }, [remote, expanded, row.session_key, row.provider, from, to, version, detailOffset, retry]);
+  const preview = row.model_preview ?? row.models.map(model => model.model_name);
+  const knownPreviewCount = preview.filter(name => name !== null).length;
+  const previewLabel = preview.length ? preview.map(modelName).join(', ') + (row.model_count > knownPreviewCount ? ` +${row.model_count - knownPreviewCount} more` : '') : `${row.model_count} recorded models`;
   const models = [...(remote ? detail?.items ?? [] : row.models)].sort((a, b) => (b.workload_tokens ?? 0) - (a.workload_tokens ?? 0));
   return <Fragment><tr className={`agent-color--${row.provider} session-row`}>
-    <td className="model-cell"><button type="button" className="session-link" onClick={toggle} aria-expanded={expanded} aria-label={`Show model breakdown for session ${row.session_key.slice(0, 8)}`}><Icon name="chevron" className={expanded ? 'is-expanded' : ''} /><span className="session-id">{row.session_key.slice(0, 8)}</span><span className="agent-label">{agentName(row.provider)}</span></button><div className="session-models">{selected !== undefined ? modelName(selected) : remote ? `${row.model_count} recorded models` : models.map((model) => modelName(model.model_name)).join(' · ')}</div><span className="session-date">Last usage {date(row.last_seen)}</span></td><Counters row={metrics} /><td className="usage-number">{row.model_count}</td>
-  </tr>{expanded ? <tr className="session-detail-row"><td colSpan={8}><div className="session-details"><strong>Models in this session</strong><span className="session-details__note">All recorded models · session total {formatMetric(row.workload_tokens)} tokens</span>{detailLoading ? <span role="status">Loading model breakdown…</span> : null}{detailError ? <span role="alert">Could not load model breakdown.<button onClick={() => setRetry(retry + 1)}>Retry breakdown</button></span> : null}{models.map((model) => <div className="session-model" key={model.model_name ?? '__unknown'}><span>{modelName(model.model_name)}</span><span>{formatMetric(model.workload_tokens)} tokens</span><span>Input {formatMetric(model.input_total_tokens)} · Output {formatMetric(model.output_total_tokens)}</span><span>{percent(model.workload_tokens, row.workload_tokens)}</span></div>)}{remote && (detail?.total ?? 0) > 25 ? <div className="page-controls"><button disabled={detailLoading || detailOffset === 0} onClick={() => setDetailOffset(Math.max(0, detailOffset - 25))}>Previous models</button><button disabled={detailLoading || detailOffset + 25 >= detail!.total} onClick={() => setDetailOffset(detailOffset + 25)}>Next models</button></div> : null}</div></td></tr> : null}</Fragment>;
+    {compact ? <><td className="model-cell"><button type="button" className="session-link" onClick={toggle} aria-expanded={expanded} aria-label={`Show model breakdown for session ${row.session_key.slice(0, 8)}`}><Icon name="sessions" /><span title={row.session_key}>Session {row.session_key.slice(0, 8)}</span><Icon name="chevron" className={expanded ? 'is-expanded' : ''} /></button></td><td><button type="button" className="session-agent-detail" onClick={toggle} aria-expanded={expanded} aria-label={`View models used by ${agentName(row.provider)} in session ${row.session_key.slice(0, 8)}`}><AgentIcon provider={row.provider} /><span><span>{agentName(row.provider)}</span><small title={previewLabel}>{previewLabel}</small></span></button></td><td className="usage-number">{row.model_count}</td><td className="usage-number usage-number--total" title={full(metrics.workload_tokens)}>{formatMetric(metrics.workload_tokens)}</td><td className="session-last-seen"><time dateTime={row.last_seen ?? undefined}>{date(row.last_seen)}</time></td></> : <><td className="model-cell"><button type="button" className="session-link" onClick={toggle} aria-expanded={expanded} aria-label={`Show model breakdown for session ${row.session_key.slice(0, 8)}`}><Icon name="chevron" className={expanded ? 'is-expanded' : ''} /><span className="session-id">{row.session_key.slice(0, 8)}</span><span className="agent-label">{agentName(row.provider)}</span></button><div className="session-models">{selected !== undefined ? modelName(selected) : remote ? `${row.model_count} recorded models` : models.map((model) => modelName(model.model_name)).join(' · ')}</div><span className="session-date">Last usage {date(row.last_seen)}</span></td><Counters row={metrics} /><td className="usage-number">{row.model_count}</td></>}
+  </tr>{expanded ? <tr className="session-detail-row"><td colSpan={compact ? 5 : 8}><div className="session-details"><strong>Models in this session</strong><span className="session-details__note">All recorded models · session total {formatMetric(row.workload_tokens)} tokens</span>{detailLoading ? <span role="status">Loading model breakdown…</span> : null}{detailError ? <span role="alert">Could not load model breakdown.<button onClick={() => setRetry(retry + 1)}>Retry breakdown</button></span> : null}{models.map((model) => <div className="session-model" key={model.model_name ?? '__unknown'}><span>{modelName(model.model_name)}</span><span>{formatMetric(model.workload_tokens)} tokens</span><span>Input {formatMetric(model.input_total_tokens)} · Output {formatMetric(model.output_total_tokens)}</span><span>{percent(model.workload_tokens, row.workload_tokens)}</span></div>)}{remote && (detail?.total ?? 0) > 25 ? <div className="page-controls"><button disabled={detailLoading || detailOffset === 0} onClick={() => setDetailOffset(Math.max(0, detailOffset - 25))}>Previous models</button><button disabled={detailLoading || detailOffset + 25 >= detail!.total} onClick={() => setDetailOffset(detailOffset + 25)}>Next models</button></div> : null}</div></td></tr> : null}</Fragment>;
 }
