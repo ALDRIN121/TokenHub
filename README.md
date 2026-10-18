@@ -273,3 +273,10 @@ at a real provider path or opens a real credential store is a bug.
   TokenHub does not estimate how a session's tokens were used across days.
   Distinct session/model counts cannot be added across buckets because the same
   session/model may occur on multiple dates. Token and event sums do reconcile.
+
+## Contributing and security
+
+Contributions through forks and pull requests are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for setup, validation, and the maintainer merge
+process, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for project guidelines.
+Report vulnerabilities privately using [SECURITY.md](SECURITY.md).
