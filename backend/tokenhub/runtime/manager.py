@@ -21,7 +21,8 @@ from tokenhub.runtime.instance import (
 )
 from tokenhub.settings import DEFAULT_PORT, TokenHubSettings
 
-_READY_TIMEOUT_SECONDS = 10.0
+_STARTUP_TIMEOUT_SECONDS = 30.0
+_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 _POLL_INTERVAL_SECONDS = 0.1
 
 
@@ -70,7 +71,7 @@ class RuntimeManager:
                 return False
             if not request_stop(record):
                 raise RuntimeError("Token Hub could not be stopped")
-            deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
+            deadline = time.monotonic() + _SHUTDOWN_TIMEOUT_SECONDS
             # HTTP can close before the process releases its database and log handles.
             while probe(record) or _recorded_process_alive(record):
                 if time.monotonic() >= deadline:
@@ -84,7 +85,10 @@ class RuntimeManager:
         if port is not None:
             TokenHubSettings(port=port)
         self._prepare_directory()
-        with FileLock(str(self.data_directory / "runtime.lock"), timeout=10):
+        # Another launcher may still be starting its child or cleaning up a failed one.
+        with FileLock(
+            str(self.data_directory / "runtime.lock"), timeout=_STARTUP_TIMEOUT_SECONDS + 5
+        ):
             existing = read_record(self.data_directory)
             if existing is not None:
                 if probe(existing):
@@ -126,7 +130,7 @@ class RuntimeManager:
             try:
                 record = InstanceRecord(child.pid, selected_port, token, _process_start_time(child.pid))
                 write_record(self.data_directory, record)
-                deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
+                deadline = time.monotonic() + _STARTUP_TIMEOUT_SECONDS
                 while True:
                     if child.poll() is not None:
                         break
