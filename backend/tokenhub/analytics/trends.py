@@ -185,7 +185,7 @@ def _breakdown(analytics: "AnalyticsService", events: Any, all_time: bool,
         values = project(row)
         identity = (values.pop("provider"), values.pop("model_name") if dimension == "models" else None)
         period = values.pop("period")
-        grouped[(*identity, period)] = values
+        grouped[identity + (period,)] = values
     items = []
     for key in keys:
         provider, model = key[0], key[1] if dimension == "models" else None
