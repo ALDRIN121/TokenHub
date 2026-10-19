@@ -1,5 +1,6 @@
 """Application settings that can be isolated from host configuration."""
 
+import os
 from dataclasses import dataclass
 from math import isfinite
 from pathlib import Path
@@ -51,3 +52,9 @@ class TokenHubSettings:
         object.__setattr__(self, "host", host)
         object.__setattr__(self, "port", port)
         object.__setattr__(self, "scan_interval_seconds", scan_interval_seconds)
+
+    @property
+    def pricing_file(self) -> Path:
+        """User-editable pricing file, overridable for tests and shared installs."""
+        override = os.environ.get("TOKENHUB_PRICING_FILE")
+        return Path(override) if override else self.data_directory / "pricing.json"

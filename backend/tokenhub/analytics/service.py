@@ -8,6 +8,7 @@ from sqlalchemy import case, func, or_, select
 from tokenhub.compat import UTC
 from tokenhub.database.repositories import UsageRepository
 from tokenhub.domain.models import DashboardSummary
+from tokenhub.pricing import PricingTable, aggregate_costs, price_row
 
 _COUNTERS = ("input_total_tokens", "output_total_tokens", "cache_read_tokens",
              "cache_write_tokens", "reasoning_tokens")
@@ -25,8 +26,9 @@ def _project(row: Any) -> dict[str, Any]:
 
 
 class AnalyticsService:
-    def __init__(self, usage_repository: UsageRepository) -> None:
+    def __init__(self, usage_repository: UsageRepository, pricing: PricingTable | None = None) -> None:
         self.usage_repository = usage_repository
+        self.pricing = pricing or PricingTable.load()
 
     def dashboard(self) -> DashboardSummary:
         return self.usage_repository.dashboard_totals()
@@ -69,11 +71,13 @@ class AnalyticsService:
                     .order_by(func.sum(events.input_total_tokens + events.output_total_tokens).desc(), events.provider)
             ).mappings()]
             if summary_only:
+                self._apply_costs(totals, providers, self._price_models(self._model_rows(events)))
                 unknown = {provider: count for provider, count in session.execute(select(events.provider, func.count())
                     .where(events.model_name.is_(None)).group_by(events.provider))}
                 return {"totals": totals, "providers": providers, "models": [], "sessions": [], "paging": True,
                         "unknown_model_events": unknown}
-            models = self._model_rows(events)
+            models = self._price_models(self._model_rows(events))
+            self._apply_costs(totals, providers, models)
             sessions = [_project(row) for row in session.execute(self._session_query(events)).mappings()]
             groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
             for row in session.execute(select(events.provider, self._key(events).label("session_key"),
@@ -96,6 +100,25 @@ class AnalyticsService:
         return [_project(row) for row in self.usage_repository.session.execute(self._model_query(events)
             .order_by(func.sum(events.input_total_tokens + events.output_total_tokens).desc(),
                       events.provider, events.model_name)).mappings()]
+
+    def _price_models(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Attach estimated USD cost to each model row; unpriced rows stay null."""
+        for row in rows:
+            cost, unpriced = price_row(self.pricing, row)
+            row["estimated_cost_usd"] = cost
+            row["unpriced_event_count"] = unpriced
+        return rows
+
+    @staticmethod
+    def _apply_costs(totals: dict[str, Any], providers: list[dict[str, Any]],
+                     model_rows: list[dict[str, Any]]) -> None:
+        for row in [totals, *providers]:
+            group = model_rows if row is totals else [
+                model for model in model_rows if model["provider"] == row["provider"]
+            ]
+            cost, unpriced = aggregate_costs(group)
+            row["estimated_cost_usd"] = cost
+            row["unpriced_event_count"] = unpriced
 
     def _session_query(self, events: Any) -> Any:
         return select(events.provider, self._key(events).label("session_key"), *self._summary(events)).group_by(
@@ -150,6 +173,8 @@ class AnalyticsService:
         with session.begin():
             total = session.scalar(select(func.count()).select_from(filtered)) or 0
             items = [_project(row) for row in session.execute(page).mappings()]
+            if kind != "sessions":
+                self._price_models(items)
             if kind == "sessions":
                 full_rows = {(row["provider"], row["session_key"]): _project(row) for row in session.execute(
                     select(full_sessions).where(full_sessions.session_key.in_([row["session_key"] for row in items]))

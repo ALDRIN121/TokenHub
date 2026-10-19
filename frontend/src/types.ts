@@ -137,6 +137,10 @@ export interface UsageTotals {
   incomplete_event_count: number;
   first_seen: string | null;
   last_seen: string | null;
+  /** Estimated USD cost from the editable pricing file; null when nothing was priced. */
+  estimated_cost_usd?: number | null;
+  /** Events whose model had no bundled rate, so the cost above omits them. */
+  unpriced_event_count?: number;
 }
 
 export interface ModelUsage extends UsageTotals {

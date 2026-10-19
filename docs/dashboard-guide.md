@@ -12,6 +12,8 @@ tokenhub start
 
 Restart the existing local server after upgrading, then reload the dashboard. TokenHub retains its local database and previously approved sources. Python 3.10 or later is required. `tokenhub --version` prints the installed version.
 
+Cost estimates use the editable `~/.tokenhub/pricing.json`; models without a rate are shown as unpriced and excluded from totals. See the [pricing guide](pricing.md) for rates and calculation.
+
 ## Find your usage
 
 The first screen shows workload tokens, input, output, sessions and models above a stacked agent-usage chart. Use **Agent** and **Date range** to choose a scope, or click an agent in **Agent breakdown**. Agent cards show their token totals and a colored percentage badge, and the selected agent stays highlighted. The agent picker includes locally bundled icons. Ranking amounts and shares always compare all agents within the selected date range; the summary, trend and analysis use your selected agent.

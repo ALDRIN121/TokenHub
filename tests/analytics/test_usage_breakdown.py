@@ -96,6 +96,22 @@ def test_usage_period_preserves_unknown_empty_totals(app_services: Services) -> 
     assert result['totals']['event_count'] == 0
 
 
+def test_usage_breakdown_prices_models_and_counts_unpriced_events(app_services) -> None:
+    usage = app_services.usage_repository
+    usage.persist_scan([
+        replace(event("a", "priced", "claude-sonnet-5", "session")),
+        replace(event("a", "unpriced", "gpt-6-sol", "session")),
+    ], SyncCursor("a", 0, None, "test"))
+    result = app_services.analytics.usage_breakdown()
+    rows = {row["model_name"]: row for row in result["models"]}
+    assert rows["claude-sonnet-5"]["estimated_cost_usd"] == 0.000324
+    assert rows["claude-sonnet-5"]["unpriced_event_count"] == 0
+    assert rows["gpt-6-sol"]["estimated_cost_usd"] is None
+    assert rows["gpt-6-sol"]["unpriced_event_count"] == 1
+    assert result["totals"]["estimated_cost_usd"] == 0.000324
+    assert result["totals"]["unpriced_event_count"] == 1
+
+
 def test_sql_aggregates_match_reference_without_loading_event_objects(app_services, monkeypatch):
     from tokenhub.analytics.breakdown import usage_breakdown
     usage = app_services.usage_repository

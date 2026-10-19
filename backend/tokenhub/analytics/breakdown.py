@@ -6,6 +6,9 @@ from typing import Any
 
 from tokenhub.compat import UTC
 from tokenhub.database.models import UsageEventRecord
+from tokenhub.pricing import PricingTable, aggregate_costs, price_row
+
+_PRICING = PricingTable.load()
 
 _COUNTERS = (
     "input_total_tokens", "output_total_tokens", "cache_read_tokens",
@@ -56,10 +59,17 @@ def usage_breakdown(events: list[UsageEventRecord]) -> dict[str, Any]:
     model_rows = []
     for (provider, model), group in models.items():
         attributions = {event.model_attribution for event in group}
-        model_rows.append(dict(
-            _summary(group), provider=provider, model_name=model,
-            attribution=next(iter(attributions)) if len(attributions) == 1 else "mixed",
-        ))
+        row = dict(_summary(group), provider=provider, model_name=model,
+                   attribution=next(iter(attributions)) if len(attributions) == 1 else "mixed")
+        row["estimated_cost_usd"], row["unpriced_event_count"] = price_row(_PRICING, row)
+        model_rows.append(row)
+    totals = _summary(events)
+    provider_rows = [dict(_summary(group), provider=provider) for provider, group in providers.items()]
+    for row in [totals, *provider_rows]:
+        priced_group = model_rows if row is totals else [
+            model for model in model_rows if model["provider"] == row["provider"]
+        ]
+        row["estimated_cost_usd"], row["unpriced_event_count"] = aggregate_costs(priced_group)
     session_rows = []
     for (provider, key), group in sessions.items():
         session_models: dict[str | None, list[UsageEventRecord]] = defaultdict(list)
@@ -71,8 +81,8 @@ def usage_breakdown(events: list[UsageEventRecord]) -> dict[str, Any]:
         ))
     sort_key = lambda row: (-(row["workload_tokens"] or 0), row["provider"], row.get("model_name") or "")
     return {
-        "totals": _summary(events),
-        "providers": sorted([dict(_summary(group), provider=provider) for provider, group in providers.items()], key=sort_key),
+        "totals": totals,
+        "providers": sorted(provider_rows, key=sort_key),
         "models": sorted(model_rows, key=sort_key),
         "sessions": sorted(session_rows, key=sort_key),
     }

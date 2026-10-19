@@ -35,6 +35,7 @@ from tokenhub.ingestion.service import (
     SourceNotFoundError,
     UnsupportedSourceError,
 )
+from tokenhub.pricing import PricingTable, ensure_pricing_file
 from tokenhub.settings import TokenHubSettings
 
 
@@ -74,6 +75,8 @@ class Container:
         self._latest_job: str | None = None
         self._progress_revision = 0
         self._discovery_results: list[DetectionResult] | None = None
+        self._pricing: PricingTable | None = None
+        self._pricing_mtime: int | None = None
         self._status: dict[str, Any] = {
             "scan_interval_seconds": settings.scan_interval_seconds, "codex_auto_import": False,
             "auto_import_connectors": [], "last_scan_at": None, "failed_source_count": 0,
@@ -109,6 +112,19 @@ class Container:
         if self._services is not None:
             self._services.discovery.context = context
 
+    def pricing_table(self) -> PricingTable:
+        """Reload the editable pricing file when its mtime changes."""
+        path = self.settings.pricing_file
+        try:
+            mtime = path.stat().st_mtime_ns
+        except OSError:
+            mtime = 0
+        with self.lock:
+            if self._pricing is None or self._pricing_mtime != mtime:
+                self._pricing = PricingTable.load(path)
+                self._pricing_mtime = mtime
+            return self._pricing
+
     def _build_services(self, session: Session) -> Services:
         registry = ConnectorRegistry.default()
         sources = SourceRepository(session)
@@ -116,7 +132,8 @@ class Container:
         discovery = DiscoveryService(registry, sources, self.discovery_context)
         ingestion = IngestionService(sources, usage, registry)
         collection = CollectionService(sources, usage, discovery, ingestion)
-        return Services(session, sources, usage, discovery, ingestion, AnalyticsService(usage), collection)
+        return Services(session, sources, usage, discovery, ingestion,
+                        AnalyticsService(usage, self.pricing_table()), collection)
 
     @contextmanager
     def read_services(self) -> Iterator[Services]:
@@ -127,6 +144,10 @@ class Container:
 
     def start(self) -> None:
         run_migrations(self.settings)
+        try:
+            ensure_pricing_file(self.settings.pricing_file)
+        except OSError as failure:
+            logging.getLogger(__name__).warning("could not create editable pricing file: %s", failure)
         self._engine = create_engine_for(self.settings)
         self._history = load_history(self.settings.data_directory)
         self._latest_job = self._history[-1]["job_id"] if self._history else None
