@@ -1,7 +1,9 @@
 """Local calendar buckets, shared by SQL grouping and interval labels."""
 
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
+
+from tokenhub.compat import UTC
 
 
 def midnight(day: date, zone: ZoneInfo) -> datetime:

@@ -15,7 +15,7 @@ For dashboard navigation, sessions, sync, themes and accuracy, see the [dashboar
 
 ## Install and run
 
-Requires Python 3.12 or newer. Install from [PyPI](https://pypi.org/project/tokenhub/):
+Requires Python 3.10 or newer. Install from [PyPI](https://pypi.org/project/tokenhub/):
 
 ```bash
 pip install tokenhub

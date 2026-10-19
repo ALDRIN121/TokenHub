@@ -10,10 +10,11 @@ import json
 import os
 import shutil
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from tokenhub.compat import UTC
 from tokenhub.connectors.antigravity import PARSER_VERSION
 from tokenhub.connectors.metadata import usage_identifier
 from tokenhub.connectors.protocol import ScanResult

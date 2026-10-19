@@ -1,11 +1,12 @@
 import json
 import os
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 import tokenhub.connectors.codex.parser as codex_parser
+from tokenhub.compat import UTC
 from tokenhub.connectors.codex.parser import parse_codex_jsonl
 from tokenhub.domain.models import (
     MeasurementType,

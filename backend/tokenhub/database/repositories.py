@@ -1,6 +1,6 @@
 """Repositories that keep source approval and scan persistence transactional."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, cast
 
 from sqlalchemy import Table, case, delete, func, or_, select, true, union_all, update
@@ -8,6 +8,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session, aliased
 
+from tokenhub.compat import UTC
 from tokenhub.connectors.claude import PARSER_VERSION as CLAUDE_PARSER_VERSION
 from tokenhub.connectors.codex import PARSER_VERSION
 from tokenhub.connectors.hermes import PARSER_VERSION as HERMES_PARSER_VERSION

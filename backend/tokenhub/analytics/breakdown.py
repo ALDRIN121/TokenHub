@@ -2,9 +2,9 @@
 
 import hashlib
 from collections import defaultdict
-from datetime import UTC
 from typing import Any
 
+from tokenhub.compat import UTC
 from tokenhub.database.models import UsageEventRecord
 
 _COUNTERS = (

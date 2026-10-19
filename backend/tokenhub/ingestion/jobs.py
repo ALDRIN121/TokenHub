@@ -9,9 +9,11 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from tokenhub.compat import UTC
 
 _TERMINAL = {"completed", "completed_with_errors", "failed", "interrupted"}
 

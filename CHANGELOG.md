@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.7 - 2026-10-19
+
+TokenHub installs and runs on Python 3.10 and newer. Timezone handling, string enums and ISO-8601 parsing use compatibility shims where the standard library only gained the behavior in 3.11, so existing connector files parse unchanged on every supported version. The package metadata now declares `Requires-Python >=3.10`, and CI verifies both the 3.10 floor and 3.12.
+
 ## 0.1.6 - 2026-10-18
 
 The dashboard has a refreshed top navigation layout, coordinated light/dark themes, a stacked agent-usage chart, clearer agent shares and compact session previews. Agent selection now includes bundled icons and full keyboard navigation. Custom inclusive date ranges, calendar-month grouping, visible plotted dates and sparse-data guidance make trends easier to interpret. Chart tooltips no longer move surrounding content, and the header shows the age of the last completed scan. Session rows preview recorded model names; model drilldowns correctly retain full-session totals. Subtle transitions respect reduced-motion preferences. See the [dashboard guide](docs/dashboard-guide.md) and [release notes](docs/releases/0.1.6.md).
