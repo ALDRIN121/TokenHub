@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.8 - 2026-10-19
+
+The usage overview estimates USD cost per model and in total from an editable
+`~/.tokenhub/pricing.json`, seeded with bundled per-million-token rates. Cache
+read and write counters are priced separately, aliases and dated model names
+resolve to their base entry, and provider-prefixed and OpenRouter-style names
+fall back to the bare model with per-route overrides. Models without a published
+rate remain explicitly unpriced instead of being guessed. `tokenhub pricing`
+prints the active file. Analytics reads now scan a materialized canonical
+projection that ingest refreshes for the identities it touched, so the
+`row_number()` dedupe window no longer runs on every request; concurrent polls
+share one build and unchanged API reads return `304`. At 300,000 events the
+dashboard median drops from 2,738 ms to 140 ms and trends from 12,600 ms to
+4,003 ms, in exchange for 108 MB → 189 MB of local storage. See the
+[release notes](docs/releases/0.1.8.md).
+
 ## 0.1.7 - 2026-10-19
 
 TokenHub installs and runs on Python 3.10 and newer. Timezone handling, string enums and ISO-8601 parsing use compatibility shims where the standard library only gained the behavior in 3.11, so existing connector files parse unchanged on every supported version. The package metadata now declares `Requires-Python >=3.10`, and CI verifies both the 3.10 floor and 3.12.

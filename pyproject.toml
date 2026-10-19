@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tokenhub"
-version = "0.1.7"
+version = "0.1.8"
 description = "Local-first TokenHub"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,7 +38,7 @@ dev = [
 where = ["backend"]
 
 [tool.setuptools.package-data]
-tokenhub = ["web/index.html", "web/favicon.svg", "web/assets/*"]
+tokenhub = ["web/index.html", "web/favicon.svg", "web/assets/*", "data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
