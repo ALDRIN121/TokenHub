@@ -71,7 +71,8 @@ class RuntimeManager:
             if not request_stop(record):
                 raise RuntimeError("Token Hub could not be stopped")
             deadline = time.monotonic() + _READY_TIMEOUT_SECONDS
-            while probe(record):
+            # HTTP can close before the process releases its database and log handles.
+            while probe(record) or _recorded_process_alive(record):
                 if time.monotonic() >= deadline:
                     raise RuntimeError("Token Hub did not stop in time")
                 time.sleep(_POLL_INTERVAL_SECONDS)
