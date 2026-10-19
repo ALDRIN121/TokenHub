@@ -1,10 +1,11 @@
 """SQL summaries and bounded views of canonical observed usage."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import case, func, or_, select
 
+from tokenhub.compat import UTC
 from tokenhub.database.repositories import UsageRepository
 from tokenhub.domain.models import DashboardSummary
 

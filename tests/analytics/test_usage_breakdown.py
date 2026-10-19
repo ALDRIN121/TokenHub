@@ -1,8 +1,9 @@
 """The explorer reconciles with observed totals without leaking raw sessions."""
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
 
+from tokenhub.compat import UTC
 from tokenhub.domain.models import (
     MeasurementType,
     Provider,

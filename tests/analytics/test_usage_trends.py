@@ -1,16 +1,17 @@
 """Calendar trends use the same canonical observations as the dashboard."""
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pytest
+from tokenhub.compat import UTC, parse_iso_timestamp
 from tokenhub.domain.models import Provider, SyncCursor
 
 from tests.analytics.test_usage_breakdown import event
 
 
 def stamp(value: str) -> datetime:
-    return datetime.fromisoformat(value)
+    return parse_iso_timestamp(value)
 
 
 def seed(services, rows):

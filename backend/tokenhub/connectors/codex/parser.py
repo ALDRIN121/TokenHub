@@ -4,9 +4,10 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
+from tokenhub.compat import UTC, parse_iso_timestamp
 from tokenhub.connectors.codex import PARSER_VERSION
 from tokenhub.connectors.metadata import usage_identifier
 from tokenhub.domain.models import (
@@ -257,7 +258,7 @@ def _parse_timestamp(value: Any) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        timestamp = datetime.fromisoformat(value)
+        timestamp = parse_iso_timestamp(value)
         return timestamp.astimezone(UTC) if timestamp.tzinfo is not None else None
     except (OverflowError, ValueError):
         return None

@@ -8,9 +8,10 @@ import hashlib
 import json
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
+from tokenhub.compat import UTC
 from tokenhub.connectors.copilot import PARSER_VERSION
 from tokenhub.connectors.metadata import usage_identifier
 from tokenhub.connectors.protocol import ScanResult

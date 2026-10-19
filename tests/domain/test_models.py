@@ -1,5 +1,6 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
+from tokenhub.compat import UTC
 from tokenhub.domain.models import (
     Confidence,
     MeasurementType,

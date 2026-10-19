@@ -1,12 +1,13 @@
 import os
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from tokenhub.compat import UTC
 from tokenhub.database.models import SourceRecord
 from tokenhub.database.repositories import SourceRepository, UsageRepository
 from tokenhub.database.session import create_engine_for, initialize_database

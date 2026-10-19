@@ -4,8 +4,9 @@ import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
 from pathlib import Path
+
+from tokenhub.compat import StrEnum
 
 
 class Provider(StrEnum):

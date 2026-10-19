@@ -2,9 +2,10 @@
 
 import os
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
+from tokenhub.compat import UTC
 from tokenhub.database.models import SourceRecord
 from tokenhub.database.repositories import SourceRepository, UsageRepository
 from tokenhub.discovery.service import DiscoveryService

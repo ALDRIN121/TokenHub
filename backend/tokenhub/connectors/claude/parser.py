@@ -4,9 +4,9 @@ import hashlib
 import json
 import os
 from dataclasses import replace
-from datetime import UTC, datetime
 from typing import Any
 
+from tokenhub.compat import UTC, parse_iso_timestamp
 from tokenhub.connectors.claude import PARSER_VERSION
 from tokenhub.connectors.metadata import usage_identifier
 from tokenhub.connectors.protocol import ScanResult
@@ -127,7 +127,7 @@ def _usage_event(record: Any, source: SourceDescriptor) -> UsageEvent | None:
     if not isinstance(usage, dict):
         return None
     try:
-        timestamp = datetime.fromisoformat(record["timestamp"])
+        timestamp = parse_iso_timestamp(record["timestamp"])
         if timestamp.tzinfo is None:
             return None
         prompt = _token(usage, "input_tokens")

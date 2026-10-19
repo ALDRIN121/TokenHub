@@ -11,12 +11,30 @@ permissions:
 
 jobs:
   verify:
-    name: Verify ${{ matrix.os }}
+    name: ${{ matrix.label }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            python-version: '3.12'
+            label: Verify ubuntu-latest
+          - os: macos-latest
+            python-version: '3.12'
+            label: Verify macos-latest
+          - os: windows-latest
+            python-version: '3.12'
+            label: Verify windows-latest
+          - os: ubuntu-latest
+            python-version: '3.10'
+            label: Verify Python 3.10 (ubuntu-latest)
+          - os: macos-latest
+            python-version: '3.10'
+            label: Verify Python 3.10 (macos-latest)
+          - os: windows-latest
+            python-version: '3.10'
+            label: Verify Python 3.10 (windows-latest)
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -26,7 +44,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v9.0.0
       - name: Check bundled dashboard
         shell: bash
@@ -38,7 +56,7 @@ jobs:
           git diff --numstat -- backend/tokenhub/web
           test ! -s ui-status.txt
       - name: Install Python dependencies
-        run: uv sync --frozen --all-groups
+        run: uv sync --frozen --all-groups --python ${{ matrix.python-version }}
       - name: Test and type check
         shell: bash
         run: |

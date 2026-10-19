@@ -1,6 +1,6 @@
 """Bounded, paired calendar views over the explorer's canonical observations."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -8,6 +8,7 @@ from sqlalchemy import case, func, literal, or_, select, union_all
 
 from tokenhub.analytics.calendar import bucket_date, midnight
 from tokenhub.analytics.service import _COUNTERS, _project
+from tokenhub.compat import UTC
 
 if TYPE_CHECKING:
     from tokenhub.analytics.service import AnalyticsService

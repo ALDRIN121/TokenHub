@@ -10,7 +10,7 @@ tokenhub stop
 tokenhub start
 ```
 
-Restart the existing local server after upgrading, then reload the dashboard. TokenHub retains its local database and previously approved sources. Python 3.12 or later is required. `tokenhub --version` prints the installed version.
+Restart the existing local server after upgrading, then reload the dashboard. TokenHub retains its local database and previously approved sources. Python 3.10 or later is required. `tokenhub --version` prints the installed version.
 
 ## Find your usage
 
