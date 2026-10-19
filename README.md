@@ -24,6 +24,7 @@ tokenhub status              # prints its local URL
 tokenhub open                # opens an already running dashboard
 tokenhub stop                # stops this TokenHub instance
 tokenhub --version           # prints the installed version
+tokenhub pricing             # prints the editable pricing file and rate count
 ```
 
 `tokenhub start --no-open` starts without opening a browser. Use
@@ -56,6 +57,18 @@ npm --prefix frontend run build              # writes backend/tokenhub/web
 ```
 
 The packaged UI is mounted at `/`; the API also works if the built UI is absent.
+
+## Pricing
+
+The dashboard estimates each model's cost from its token counters. The first
+start writes editable USD rates (per million tokens, including cache read and
+write rates) to `~/.tokenhub/pricing.json`; edit that file to change a rate or
+add a model, and TokenHub reloads it automatically. `tokenhub pricing` prints
+the active path. Models without a rate stay visible as **Unpriced model** and
+are excluded from cost totals rather than guessed. Provider-prefixed and
+OpenRouter-style names fall back to their bare model, and a prefixed entry can
+reprice just that route. See
+[the pricing guide](docs/pricing.md) for the format and calculation.
 
 ## Automatic collection
 

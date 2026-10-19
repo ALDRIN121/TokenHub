@@ -130,6 +130,18 @@ def status() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/pricing")
+def pricing(request: Request) -> dict[str, object]:
+    """Rates TokenHub is currently using, plus the editable file's location."""
+    container = container_for(request)
+    table = container.pricing_table()
+    return {
+        "file": container.settings.pricing_file.name,
+        "warnings": table.warnings,
+        **table.payload(),
+    }
+
+
 @router.get("/discovery")
 def discovery(request: Request, include_sources: bool = True) -> dict[str, object]:
     """Report detected providers. Presence only — no source file is read."""

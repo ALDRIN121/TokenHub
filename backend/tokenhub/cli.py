@@ -9,6 +9,7 @@ import webbrowser
 from collections.abc import Sequence
 from importlib import metadata
 
+from tokenhub.pricing import PricingTable, ensure_pricing_file
 from tokenhub.runtime.manager import RuntimeManager
 from tokenhub.server import run_server
 from tokenhub.settings import TokenHubSettings
@@ -41,12 +42,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tokenhub")
     parser.add_argument("--version", action="version", version=f"tokenhub {installed_version()}")
     parser.add_argument(
-        "command", nargs="?", choices=("start", "status", "open", "stop"), default="start"
+        "command", nargs="?", choices=("start", "status", "open", "stop", "pricing"), default="start"
     )
     parser.add_argument("--port", type=int, help="loopback port for a new server")
     parser.add_argument("--no-open", action="store_true", help="do not open a browser after start")
     options = parser.parse_args(args)
-    manager = RuntimeManager(TokenHubSettings().data_directory)
+    settings = TokenHubSettings()
+    if options.command == "pricing":
+        path = ensure_pricing_file(settings.pricing_file)
+        table = PricingTable.load(path)
+        print(path)
+        print(f"{len(table.models)} priced models · {table.metadata.get('currency', 'USD')} per million tokens")
+        for warning in table.warnings:
+            print(f"warning: {warning}", file=sys.stderr)
+        return 0
+    manager = RuntimeManager(settings.data_directory)
     try:
         if options.command == "stop":
             print("Token Hub stopped" if manager.stop() else "Token Hub is not running")

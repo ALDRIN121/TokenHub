@@ -198,3 +198,14 @@ def test_static_mount_is_optional(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
         assert "TokenHub synthetic UI" in http.get("/").text
         assert http.get("/api/v1/status").status_code == 200
         assert http.get("/", headers={"host": "attacker.example"}).status_code == 400
+
+
+def test_pricing_endpoint_exposes_editable_defaults(client: TestClient) -> None:
+    response = client.get("/api/v1/pricing")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["currency"] == "USD"
+    assert payload["unit"] == "per_million_tokens"
+    assert payload["file"].endswith("pricing.json")
+    assert payload["models"]["claude-sonnet-5"]["output"] == 10.0
+    assert payload["warnings"] == []
