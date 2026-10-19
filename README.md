@@ -276,8 +276,12 @@ at a real provider path or opens a real credential store is a bug.
   reported as partial or unavailable. Hermes needs a `sessions` table containing
   session IDs, start timestamps, and input/output counters. An unsupported or
   unreadable database leaves previously imported usage intact.
-- **No cost or pricing.** TokenHub reports token counts only — no currency, no
-  provider plan data.
+- **Estimated cost, not billing.** Costs come from editable local rates in
+  `~/.tokenhub/pricing.json`, not provider invoices or plan data. Models without
+  a published rate stay unpriced and are excluded from cost totals.
+- **Derived storage.** The canonical analytics projection duplicates observed
+  usage rows, so a migrated history uses about 1.75× the disk of the raw events
+  (108 MB → 189 MB at 300,000 events).
 - **Model attribution depends on recorded metadata.** Missing model names appear
   in “Model not recorded”. Hermes exposes session totals with a reported model;
   model switches within that session cannot be split by its current counters.
