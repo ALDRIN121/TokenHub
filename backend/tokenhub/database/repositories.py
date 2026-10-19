@@ -6,7 +6,7 @@ from typing import Any, cast
 from sqlalchemy import Table, case, delete, func, or_, select, true, union_all, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session
 
 from tokenhub.compat import UTC
 from tokenhub.connectors.claude import PARSER_VERSION as CLAUDE_PARSER_VERSION
@@ -14,6 +14,7 @@ from tokenhub.connectors.codex import PARSER_VERSION
 from tokenhub.connectors.hermes import PARSER_VERSION as HERMES_PARSER_VERSION
 from tokenhub.database.models import (
     AutoImportRootRecord,
+    CanonicalUsageEventRecord,
     ImportRunRecord,
     SourceRecord,
     SyncCursorRecord,
@@ -297,12 +298,15 @@ class UsageRepository:
         with self.session.begin():
             table = cast(Table, UsageEventRecord.__table__)
             previous_identities: set[str] = set()
+            previous_keys: set[tuple[str, str]] = set()
             if replace_events:
                 # Reconcile surviving records before pruning absent ones so a
                 # rebuild preserves known corrections over stale copies.
-                previous_identities = set(self.session.scalars(select(UsageEventRecord.record_identity).where(
-                    UsageEventRecord.source_id == cursor.source_id,
-                )))
+                previous_keys = set(self.session.execute(
+                    select(UsageEventRecord.connector_id, UsageEventRecord.record_identity)
+                    .where(UsageEventRecord.source_id == cursor.source_id)
+                ).tuples())
+                previous_identities = {identity for _, identity in previous_keys}
                 visible_change = bool(previous_identities)
             alias_rows: dict[str, Any] = {}
             aliases = list(dict.fromkeys(old for old, _ in record_identity_aliases))
@@ -394,6 +398,16 @@ class UsageRepository:
                     UsageEventRecord.source_id == cursor.source_id,
                     UsageEventRecord.record_identity.in_(obsolete[start:start + 500]),
                 ))
+            if inserted_events or visible_change:
+                touched = {(row.connector_id, row.record_identity) for row in observations}
+                touched.update(previous_keys)
+                connector_id = (observations[0].connector_id if observations
+                                else next((connector for connector, _ in previous_keys), None))
+                if connector_id is not None:
+                    for old, new in record_identity_aliases:
+                        touched.add((connector_id, old))
+                        touched.add((connector_id, new))
+                self._refresh_canonical(touched)
             self.session.execute(
                 insert(SyncCursorRecord)
                 .values(
@@ -463,6 +477,9 @@ class UsageRepository:
         with self.session.begin():
             self.session.execute(delete(UsageEventRecord).where(UsageEventRecord.source_id.in_(disabled)))
             self.session.execute(delete(SyncCursorRecord).where(SyncCursorRecord.source_id.in_(disabled)))
+            # Removing one copy can promote another source's copy, so the
+            # projection is rebuilt rather than deleted by source id.
+            self._rebuild_canonical()
 
     def current_cursors(self) -> dict[str, SyncCursor]:
         with self.session.begin():
@@ -475,10 +492,19 @@ class UsageRepository:
         """Clear only derived events and cursors; preserve approvals and audit history."""
         with self.session.begin():
             self.session.execute(delete(UsageEventRecord))
+            self.session.execute(delete(CanonicalUsageEventRecord))
             self.session.execute(delete(SyncCursorRecord))
 
+    CANONICAL_BATCH = 500
+
     @staticmethod
-    def _canonical_deltas() -> tuple[Any, Any]:
+    def _canonical_select(*criteria: Any) -> Any:
+        """The one canonical ranking rule, optionally scoped to an identity set.
+
+        ``criteria`` restrict the raw rows for an incremental projection
+        refresh; they must always cover whole (connector_id, record_identity)
+        groups, otherwise the window would rank a partial group.
+        """
         records = UsageEventRecord
         cross_file = or_(records.provider == Provider.CLAUDE_CODE.value,
             (records.provider == Provider.CODEX.value) & (records.parser_version == PARSER_VERSION)
@@ -501,20 +527,81 @@ class UsageRepository:
                 ),
             ).label("message_rank"),
         ).where(records.measurement_type == MeasurementType.DELTA.value,
-                cross_file).subquery()
+                *criteria, cross_file).subquery()
         # Deduplicate stable response/message identities before applying date
         # bounds. Legacy Codex ordinals remain scoped to their source file.
-        canonical = union_all(
+        return union_all(
             select(records).where(records.measurement_type == MeasurementType.DELTA.value,
-                                  ~cross_file),
+                                  *criteria, ~cross_file),
             select(*(ranked.c[column.name] for column in records.__table__.columns))
                 .where(ranked.c.message_rank == 1),
-        ).subquery()
-        return aliased(UsageEventRecord, canonical), true()
+        )
+
+    def _rebuild_canonical(self) -> None:
+        """Replace the whole projection; caller owns the transaction."""
+        table = cast(Table, CanonicalUsageEventRecord.__table__)
+        self.session.execute(delete(CanonicalUsageEventRecord))
+        self.session.execute(insert(table).from_select(
+            [column.name for column in table.columns], self._canonical_select()
+        ))
+
+    def rebuild_canonical(self) -> None:
+        with self.session.begin():
+            self._rebuild_canonical()
+
+    def ensure_canonical(self) -> bool:
+        """Backfill the projection once for a database created before it."""
+        with self.session.begin():
+            populated = self.session.scalar(
+                select(CanonicalUsageEventRecord.id).limit(1)
+            )
+            if populated is not None:
+                return False
+            has_events = self.session.scalar(select(UsageEventRecord.id).limit(1))
+            if has_events is None:
+                return False
+            self._rebuild_canonical()
+            return True
+
+    def _refresh_canonical(self, identities: set[tuple[str, str]]) -> None:
+        """Rebuild only the identity groups an ingest touched.
+
+        A full rebuild is linear in the whole history; a scan normally touches
+        one source's newest records, so scoping by (connector, identity) keeps
+        write amplification proportional to the batch (PowerSync's incremental
+        bucket checksums use the same idea).
+        """
+        grouped: dict[str, list[str]] = {}
+        for connector_id, record_identity in identities:
+            grouped.setdefault(connector_id, []).append(record_identity)
+        table = cast(Table, CanonicalUsageEventRecord.__table__)
+        columns = [column.name for column in table.columns]
+        records = UsageEventRecord
+        for connector_id, record_identities in grouped.items():
+            for start in range(0, len(record_identities), self.CANONICAL_BATCH):
+                chunk = record_identities[start : start + self.CANONICAL_BATCH]
+                self.session.execute(
+                    delete(CanonicalUsageEventRecord).where(
+                        CanonicalUsageEventRecord.connector_id == connector_id,
+                        CanonicalUsageEventRecord.record_identity.in_(chunk),
+                    )
+                )
+                self.session.execute(insert(table).from_select(
+                    columns,
+                    self._canonical_select(
+                        records.connector_id == connector_id,
+                        records.record_identity.in_(chunk),
+                    ),
+                ))
+
+    @staticmethod
+    def _canonical_deltas() -> tuple[type[CanonicalUsageEventRecord], Any]:
+        """Read the materialized projection; the ranking already ran at write time."""
+        return CanonicalUsageEventRecord, true()
 
     def observed_events(
         self, start: datetime | None = None, end: datetime | None = None
-    ) -> list[UsageEventRecord]:
+    ) -> list[CanonicalUsageEventRecord]:
         """Detached canonical observations shared with the overview totals."""
         events, delta = self._canonical_deltas()
         query = select(events).where(delta)
@@ -530,7 +617,6 @@ class UsageRepository:
 
     def dashboard_totals(self) -> DashboardSummary:
         """Sum observed delta values, preserving SQL NULL for unknown/no data."""
-        records = UsageEventRecord
         # Claude can copy conversation history into another session file. Keep
         # each source's provenance but count one complete observation per API
         # message, preferring the largest usage over earlier streaming chunks.
@@ -545,22 +631,20 @@ class UsageRepository:
                     func.sum(events.cache_write_tokens),
                     func.sum(events.reasoning_tokens),
                     func.count(),
+                    # One pass for quality counts instead of a second grouped
+                    # scan; both read the same materialized rows.
+                    *(func.sum(case((events.quality == quality.value, 1), else_=0))
+                      for quality in Quality),
                 ).where(delta)
             ).one()
-            quality_counts = {quality: 0 for quality in Quality}
-            for quality, count in self.session.execute(
-                select(events.quality, func.count())
-                .where(delta)
-                .group_by(events.quality)
-            ):
-                quality_counts[Quality(quality)] = count
+            quality_counts = {quality: int(totals[7 + index] or 0)
+                              for index, quality in enumerate(Quality)}
             latest_events = (
                 select(
-                    records.source_id,
-                    func.max(records.timestamp).label("latest_event_at"),
+                    events.source_id,
+                    func.max(events.timestamp).label("latest_event_at"),
                 )
-                .where(records.measurement_type == MeasurementType.DELTA.value)
-                .group_by(records.source_id)
+                .group_by(events.source_id)
                 .subquery()
             )
             freshness = tuple(
@@ -611,10 +695,9 @@ class UsageRepository:
     def quality_page(self, offset: int, limit: int) -> dict[str, Any]:
         """Bound source health output and include names in the same query."""
         events, delta = self._canonical_deltas()
-        latest = select(UsageEventRecord.source_id,
-                        func.max(UsageEventRecord.timestamp).label("latest_event_at"))\
-            .where(UsageEventRecord.measurement_type == MeasurementType.DELTA.value)\
-            .group_by(UsageEventRecord.source_id).subquery()
+        latest = select(events.source_id,
+                        func.max(events.timestamp).label("latest_event_at"))\
+            .group_by(events.source_id).subquery()
         with self.session.begin():
             quality = {value.value: 0 for value in Quality}
             quality.update({name: count for name, count in self.session.execute(select(events.quality, func.count())
