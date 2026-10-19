@@ -12,6 +12,15 @@ from tests.api.conftest import ORIGIN, codex_id
 from tests.service_support import token_record
 
 
+def test_api_reads_revalidate_with_etag(client: TestClient) -> None:
+    first = client.get("/api/v1/status")
+    etag = first.headers["etag"]
+    assert first.headers["cache-control"] == "no-cache"
+    second = client.get("/api/v1/status", headers={"If-None-Match": etag})
+    assert second.status_code == 304
+    assert second.content == b""
+
+
 def test_discovery_to_dashboard_api_flow(client: TestClient, tmp_path: Path) -> None:
     assert client.get("/api/v1/status").json() == {"status": "ok"}
     source_id = codex_id(client)
@@ -134,7 +143,7 @@ def test_lifespan_migrates_and_restart_recovers_approval(client: TestClient, api
     source_id = codex_id(client)
     assert client.post(f"/api/v1/sources/{source_id}/approve", headers=ORIGIN).status_code == 200
     with sqlite3.connect(tmp_path / "data" / "tokenhub.sqlite3") as database:
-        assert database.execute("SELECT version_num FROM alembic_version").fetchone() == ("0007_multiple_usage_roots",)
+        assert database.execute("SELECT version_num FROM alembic_version").fetchone() == ("0008_canonical_usage",)
     restarted = create_app(api_app.state.container.settings)
     with TestClient(restarted, base_url="http://127.0.0.1:7432") as second:
         restarted.state.container.collect()

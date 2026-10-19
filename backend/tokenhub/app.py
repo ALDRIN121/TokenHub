@@ -14,6 +14,7 @@ consulted: the server is not behind a proxy by design.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -68,6 +69,40 @@ def create_app(
                     status_code=403, content={"detail": "Invalid Origin header"}
                 )
         return await call_next(request)
+
+    @app.middleware("http")
+    async def conditional_api_cache(
+        request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        """Revalidate cached API reads with an ETag instead of resending them.
+
+        The payload already carries ``data_version``, so an ingest that changes
+        data produces a new body and therefore a new tag. A poll that finds
+        nothing new costs a 304 and no JSON parse on the client.
+        """
+        response = await call_next(request)
+        is_api_read = (
+            request.method in _READ_ONLY_METHODS
+            and request.url.path.startswith("/api/v1/")
+            and response.status_code == 200
+            and response.headers.get("content-type", "").startswith("application/json")
+        )
+        if not is_api_read:
+            return response
+        # BaseHTTPMiddleware hands back a streaming response; buffer the
+        # (bounded, local) JSON body so the tag covers exactly what is sent.
+        body = getattr(response, "body", None)
+        if body is None:
+            body = b"".join([chunk async for chunk in response.body_iterator])  # type: ignore[attr-defined]
+        etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+        if request.headers.get("if-none-match") == etag:
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+        headers = {key: value for key, value in response.headers.items()
+                   if key.lower() != "content-length"}
+        headers["ETag"] = etag
+        headers["Cache-Control"] = "no-cache"
+        return Response(content=body, status_code=response.status_code,
+                        headers=headers, media_type=response.media_type)
 
     app.include_router(router)
     if runtime_control is not None:

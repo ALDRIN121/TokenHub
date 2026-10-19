@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, UniqueConstraint, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -29,14 +29,13 @@ class SourceRecord(Base):
     approved_root_inode: Mapped[int | None] = mapped_column(Integer)
 
 
-class UsageEventRecord(Base):
-    __tablename__ = "usage_events"
-    __table_args__ = (
-        UniqueConstraint("source_id", "record_identity", name="uq_usage_events_source_record"),
-        Index("ix_usage_events_time", "measurement_type", "timestamp"),
-        Index("ix_usage_events_model_time", "provider", "model_name", "timestamp"),
-        Index("ix_usage_events_message", "connector_id", "record_identity"),
-    )
+class _UsageEventColumns:
+    """Columns shared by the raw observations and the canonical projection.
+
+    Both tables carry the same shape so a canonical row can be read with the
+    same projections as a raw row, while the projection is rebuilt from the
+    ranking rule instead of being recomputed on every analytics request.
+    """
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     connector_id: Mapped[str] = mapped_column(String, nullable=False)
@@ -56,6 +55,42 @@ class UsageEventRecord(Base):
     session_id: Mapped[str | None] = mapped_column(String)
     model_attribution: Mapped[str] = mapped_column(String, nullable=False, default="unknown")
     reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UsageEventRecord(_UsageEventColumns, Base):
+    __tablename__ = "usage_events"
+    __table_args__ = (
+        UniqueConstraint("source_id", "record_identity", name="uq_usage_events_source_record"),
+        Index("ix_usage_events_time", "measurement_type", "timestamp"),
+        Index("ix_usage_events_model_time", "provider", "model_name", "timestamp"),
+        Index("ix_usage_events_message", "connector_id", "record_identity"),
+        # The canonical ranking partitions by (connector_id, record_identity)
+        # for delta observations only. A partial index keeps that probe an
+        # index seek instead of a table scan (DBOS uses the same shape for its
+        # queue and retention indexes).
+        Index(
+            "ix_usage_events_delta_identity",
+            "connector_id",
+            "record_identity",
+            sqlite_where=text("measurement_type = 'delta'"),
+        ),
+    )
+
+
+class CanonicalUsageEventRecord(_UsageEventColumns, Base):
+    """Materialized canonical delta observations.
+
+    Rebuilt from :class:`UsageEventRecord` inside the ingest transaction. The
+    ranking rule stays in one place; readers only scan this table, so the
+    ``row_number()`` window and the ``UNION ALL`` never run on the read path.
+    """
+
+    __tablename__ = "usage_events_canonical"
+    __table_args__ = (
+        Index("ix_usage_canonical_time", "timestamp"),
+        Index("ix_usage_canonical_model_time", "provider", "model_name", "timestamp"),
+        Index("ix_usage_canonical_session", "connector_id", "session_id"),
+    )
 
 
 class AutoImportRootRecord(Base):

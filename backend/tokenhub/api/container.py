@@ -23,7 +23,7 @@ from tokenhub.connectors.registry import ConnectorRegistry
 from tokenhub.connectors.roots import candidate_roots
 from tokenhub.database.migrations import run_migrations
 from tokenhub.database.repositories import SourceRepository, UsageRepository
-from tokenhub.database.session import create_engine_for
+from tokenhub.database.session import create_engine_for, optimize_database
 from tokenhub.discovery.service import DiscoveryService
 from tokenhub.domain.models import ImportOutcome, RebuildOutcome
 from tokenhub.ingestion.collection import CollectionService
@@ -84,6 +84,10 @@ class Container:
         self._version_base = self._status["data_version"]
         self._cache: OrderedDict[tuple[Any, ...], tuple[dict[str, Any], int]] = OrderedDict()
         self._cache_bytes = 0
+        # One build per identical cache key. Waiters block instead of issuing a
+        # duplicate aggregate (PowerSync's LRU fetchMethod does the same for
+        # checksum requests).
+        self._inflight: dict[tuple[Any, ...], threading.Event] = {}
 
     @property
     def services(self) -> Services:
@@ -174,7 +178,27 @@ class Container:
             if cache_key in self._cache:
                 self._cache.move_to_end(cache_key)
                 return self._cache[cache_key][0]
-        result = {**build(), "data_version": version}
+            waiter = self._inflight.get(cache_key)
+            if waiter is None:
+                waiter = threading.Event()
+                self._inflight[cache_key] = waiter
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            waiter.wait(timeout=60)
+            with self.lock:
+                if cache_key in self._cache:
+                    self._cache.move_to_end(cache_key)
+                    return self._cache[cache_key][0]
+        try:
+            result = {**build(), "data_version": version}
+        except Exception:
+            if owner:
+                with self.lock:
+                    self._inflight.pop(cache_key, None)
+                waiter.set()
+            raise
         size = len(json.dumps(result).encode())
         with self.lock:
             if version == self._status["data_version"] and size <= 16 * 1024 * 1024:
@@ -185,6 +209,9 @@ class Container:
                 self._cache_bytes += size
                 while len(self._cache) > 32 or self._cache_bytes > 16 * 1024 * 1024:
                     self._cache_bytes -= self._cache.popitem(last=False)[1][1]
+            if owner:
+                self._inflight.pop(cache_key, None)
+                waiter.set()
         return result
 
     def _snapshot(self, job_id: str | None) -> dict[str, Any] | None:
@@ -301,6 +328,11 @@ class Container:
         try:
             self._services = self._build_services(Session(self._engine))
             self.services.source_repository.upgrade_codex_parser_versions()
+            # A database created before the projection existed has raw events
+            # but no canonical rows. Backfill once, before the app reports
+            # ready, so the first dashboard request is already fast.
+            if self.services.usage_repository.ensure_canonical():
+                optimize_database(self._engine)
             self.services.collection.on_change = self._sync_status
             self.services.discovery.on_change = self._on_discovery_change
             self._sync_status()
@@ -338,6 +370,11 @@ class Container:
                               else self.services.collection.failed_source_count if job.kind in {"enable", "refresh"} else 0)
                     job.state = "completed_with_errors" if failed else "completed"
                     job.stage = "complete"
+                    if self._engine is not None and (
+                        isinstance(job.value, RebuildOutcome)
+                        or (isinstance(job.value, ImportOutcome) and job.value.inserted_events)
+                    ):
+                        optimize_database(self._engine)
                 except ScanInterrupted as error:
                     self.services.session.rollback()
                     job.state = job.stage = "interrupted"
