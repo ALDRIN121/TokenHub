@@ -1,0 +1,41 @@
+name: Bug report
+description: Report a reproducible TokenHub problem using redacted or synthetic data.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For vulnerabilities, use private security reporting instead of this form.
+        Never attach real session logs, transcripts, provider databases, auth files, tokens, or private paths.
+  - type: input
+    id: version
+    attributes:
+      label: TokenHub version
+      description: Run tokenhub --version.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and Python version
+      placeholder: macOS, Python 3.12
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Use a minimal synthetic example and name the affected coding agent if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics or screenshots
+      description: Remove private data and paths before sharing.

@@ -122,6 +122,7 @@ def test_stop_waits_for_shutdown_then_clears_matching_record(tmp_path, monkeypat
     probes = iter([True, True, False])
     monkeypatch.setattr(module, "probe", lambda _: next(probes))
     monkeypatch.setattr(module, "request_stop", lambda _: True)
+    monkeypatch.setattr(module, "_recorded_process_alive", lambda _: False)
     monkeypatch.setattr(module.time, "sleep", lambda _: None)
     assert RuntimeManager(tmp_path).stop() is True
     assert read_record(tmp_path) is None
@@ -199,3 +200,52 @@ def test_reused_pid_is_not_the_recorded_process(monkeypatch):
 
     monkeypatch.setattr(module.psutil, "Process", lambda _: ReusedProcess())
     assert not module._recorded_process_alive(InstanceRecord(123, 7432, "a" * 64, 100.0))
+
+
+def test_stop_waits_for_real_process_to_exit_after_http_shutdown(tmp_path, monkeypatch):
+    from tokenhub.runtime import manager as module
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import sys, time; sys.stdin.buffer.read(1); time.sleep(0.3)"],
+        stdin=subprocess.PIPE,
+    )
+    stopping = False
+    try:
+        record = InstanceRecord(child.pid, 7432, "a" * 64, psutil.Process(child.pid).create_time())
+        write_record(tmp_path, record)
+        monkeypatch.setattr(module, "probe", lambda _: not stopping)
+
+        def request_stop(_):
+            nonlocal stopping
+            assert child.stdin is not None
+            child.stdin.write(b"x")
+            child.stdin.flush()
+            stopping = True
+            return True
+
+        monkeypatch.setattr(module, "request_stop", request_stop)
+        assert RuntimeManager(tmp_path).stop() is True
+        assert child.poll() is not None, "stop returned before the server released its resources"
+        assert read_record(tmp_path) is None
+    finally:
+        if child.poll() is None:
+            child.terminate()
+        child.wait(timeout=5)
+        if child.stdin is not None:
+            child.stdin.close()
+
+
+def test_stop_retains_record_when_process_outlives_http_shutdown(tmp_path, monkeypatch):
+    from tokenhub.runtime import manager as module
+
+    record = InstanceRecord(123, 7432, "a" * 64, 100.0)
+    write_record(tmp_path, record)
+    probes = iter([True, False])
+    clock = iter([0, 11])
+    monkeypatch.setattr(module, "probe", lambda _: next(probes))
+    monkeypatch.setattr(module, "request_stop", lambda _: True)
+    monkeypatch.setattr(module, "_recorded_process_alive", lambda _: True)
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
+    with pytest.raises(RuntimeError, match="did not stop in time"):
+        RuntimeManager(tmp_path).stop()
+    assert read_record(tmp_path) == record
