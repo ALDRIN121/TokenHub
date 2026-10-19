@@ -17,24 +17,66 @@ from contextlib import closing
 from pathlib import Path
 from zipfile import ZipFile
 
-_MIGRATION = "tokenhub/database/migrations/versions/0007_multiple_usage_roots.py"
+_MIGRATIONS = "tokenhub/database/migrations/versions/"
 
 
-def verify_archive(path: Path) -> None:
-    """Reject an archive missing any runtime or distribution resource."""
+def _members(path: Path) -> list[str]:
+    """Package-relative member names inside a wheel or source archive."""
     if path.suffix == ".whl":
         with ZipFile(path) as archive:
-            members = archive.namelist()
-    elif path.name.endswith(".tar.gz"):
+            return archive.namelist()
+    if path.name.endswith(".tar.gz"):
         with tarfile.open(path, "r:gz") as archive:
             members = [
                 name.split("/", 1)[1]
                 for name in archive.getnames()
                 if "/" in name
             ]
-        members = [name.removeprefix("backend/") for name in members]
-    else:
-        raise ValueError(f"unsupported package archive: {path}")
+        return [name.removeprefix("backend/") for name in members]
+    raise ValueError(f"unsupported package archive: {path}")
+
+
+def _read_member(path: Path, name: str) -> str:
+    if path.suffix == ".whl":
+        with ZipFile(path) as archive:
+            return archive.read(name).decode("utf-8")
+    with tarfile.open(path, "r:gz") as archive:
+        # Source archives nest everything under a versioned top-level directory.
+        for member in archive.getmembers():
+            if member.name == name or member.name.endswith("/" + name):
+                handle = archive.extractfile(member)
+                if handle is not None:
+                    return handle.read().decode("utf-8")
+    raise KeyError(name)
+
+
+def head_revision(path: Path) -> str:
+    """Alembic head packaged in the archive, derived instead of hard-coded.
+
+    A new migration used to break this check because the expected revision was
+    a constant; walking the packaged revision graph keeps the smoke test
+    honest without an edit on every migration.
+    """
+    revisions: set[str] = set()
+    parents: set[str] = set()
+    for name in _members(path):
+        if not (name.startswith(_MIGRATIONS) and name.endswith(".py")):
+            continue
+        text = _read_member(path, name)
+        revision = re.search(r'^revision(?::\s*str)?\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+        parent = re.search(r'^down_revision[^=]*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+        if revision is not None:
+            revisions.add(revision.group(1))
+        if parent is not None:
+            parents.add(parent.group(1))
+    heads = revisions - parents
+    assert len(heads) == 1, f"expected one packaged Alembic head, found {sorted(heads)}"
+    return heads.pop()
+
+
+def verify_archive(path: Path) -> None:
+    """Reject an archive missing any runtime or distribution resource."""
+    members = _members(path)
 
     assert "tokenhub/web/index.html" in members, "missing tokenhub/web/index.html"
     assert any(
@@ -43,7 +85,9 @@ def verify_archive(path: Path) -> None:
     assert any(
         name.startswith("tokenhub/web/assets/") and name.endswith(".css") for name in members
     ), "missing compiled CSS"
-    assert _MIGRATION in members, f"missing {_MIGRATION}"
+    assert any(
+        name.startswith(_MIGRATIONS) and name.endswith(".py") for name in members
+    ), "missing packaged database migrations"
     assert any(name.endswith("/entry_points.txt") for name in members), "missing entry point"
     assert any(name == "LICENSE" or name.endswith("/LICENSE") for name in members), "missing LICENSE"
 
@@ -114,7 +158,7 @@ def smoke_install(path: Path) -> None:
             database = home / ".tokenhub" / "tokenhub.sqlite3"
             with closing(sqlite3.connect(database)) as connection:
                 revision = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-            assert revision == ("0007_multiple_usage_roots",), f"unexpected Alembic revision: {revision}"
+            assert revision == (head_revision(path),), f"unexpected Alembic revision: {revision}"
             assert _run([str(tokenhub), "status"], env=env).strip() == url
             assert _run([str(tokenhub), "start", "--no-open"], env=env).strip() == url
             open_script = (
