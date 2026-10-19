@@ -6,6 +6,8 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   build: {
+    // Preserve the browser support used by the previous Vite build.
+    target: ['es2020', 'edge88', 'firefox78', 'chrome87', 'safari14'],
     outDir: '../backend/tokenhub/web',
     emptyOutDir: true,
   },
