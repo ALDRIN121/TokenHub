@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import psutil
@@ -75,6 +76,56 @@ def test_two_simultaneous_starts_spawn_one_child(tmp_path, monkeypatch):
     assert read_record(tmp_path).pid == child.pid
 
 
+def test_overlapping_slow_starts_wait_for_one_verified_child(tmp_path, monkeypatch):
+    from tokenhub.runtime import manager as module
+
+    calls = []
+    child = Child()
+    ready_at = float("inf")
+
+    def spawn(*args, **kwargs):
+        nonlocal ready_at
+        calls.append(child)
+        ready_at = time.monotonic() + 10.5
+        return child
+
+    monkeypatch.setattr(module.subprocess, "Popen", spawn)
+    monkeypatch.setattr(module, "probe", lambda _: time.monotonic() >= ready_at)
+    monkeypatch.setattr(module, "_process_start_time", lambda _: 123.0)
+    barrier = threading.Barrier(2)
+
+    def start():
+        barrier.wait()
+        return RuntimeManager(tmp_path).start()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: start(), range(2)))
+    assert results == ["http://127.0.0.1:7432/"] * 2
+    assert calls == [child]
+    assert read_record(tmp_path).pid == child.pid
+
+
+def test_slow_startup_becomes_ready_after_ten_seconds(tmp_path, monkeypatch):
+    from tokenhub.runtime import manager as module
+
+    child = Child()
+    elapsed = 0.0
+
+    def advance_time(interval):
+        nonlocal elapsed
+        elapsed += interval
+
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *a, **k: child)
+    monkeypatch.setattr(module, "probe", lambda _: elapsed >= 15.0)
+    monkeypatch.setattr(module, "_process_start_time", lambda _: 123.0)
+    monkeypatch.setattr(module.time, "monotonic", lambda: elapsed)
+    monkeypatch.setattr(module.time, "sleep", advance_time)
+
+    assert RuntimeManager(tmp_path).start() == "http://127.0.0.1:7432/"
+    assert not child.terminated and not child.waited
+    assert read_record(tmp_path).pid == child.pid
+
+
 def test_foreign_listener_never_becomes_ready_and_new_child_is_cleaned(tmp_path, monkeypatch):
     from tokenhub.runtime import manager as module
 
@@ -82,7 +133,7 @@ def test_foreign_listener_never_becomes_ready_and_new_child_is_cleaned(tmp_path,
     monkeypatch.setattr(module.subprocess, "Popen", lambda *a, **k: child)
     monkeypatch.setattr(module, "probe", lambda _: False)
     monkeypatch.setattr(module, "_process_start_time", lambda _: 123.0)
-    clock = iter([0, 11])
+    clock = iter([0, 31])
     monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
     with pytest.raises(RuntimeError, match="runtime.log"):
         RuntimeManager(tmp_path).start()

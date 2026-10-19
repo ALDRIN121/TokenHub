@@ -131,7 +131,7 @@ def smoke_install(path: Path) -> None:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
             try:
-                assert _run([str(tokenhub), "start", "--port", str(port), "--no-open"], env=env, timeout=30).strip() == url
+                assert _run([str(tokenhub), "start", "--port", str(port), "--no-open"], env=env, timeout=60).strip() == url
             except AssertionError as error:
                 log = home / ".tokenhub" / "runtime.log"
                 if log.exists():
