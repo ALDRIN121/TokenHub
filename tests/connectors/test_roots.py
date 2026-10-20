@@ -1,4 +1,4 @@
-"""Candidate roots and multi-root lookup find an agent's data on any drive."""
+"""Candidate roots and layered layout lookup find an agent on any drive."""
 
 import sys
 from pathlib import Path
@@ -9,7 +9,12 @@ from tokenhub.app import create_app
 from tokenhub.connectors.antigravity.connector import AntigravityConnector
 from tokenhub.connectors.claude.connector import ClaudeConnector
 from tokenhub.connectors.codex.connector import CodexConnector
-from tokenhub.connectors.protocol import DiscoveryContext, find_root
+from tokenhub.connectors.hermes.connector import HermesConnector
+from tokenhub.connectors.protocol import (
+    DiscoveryContext,
+    find_layout_roots,
+    locate_locations,
+)
 from tokenhub.connectors.roots import candidate_roots
 from tokenhub.settings import TokenHubSettings
 
@@ -61,66 +66,75 @@ def test_candidate_roots_ignore_drives_off_windows(tmp_path: Path) -> None:
     assert roots == (home,)
 
 
-def test_find_root_prefers_the_root_holding_data_over_an_empty_home_stub(tmp_path: Path) -> None:
+def test_a_profile_only_root_is_still_a_valid_hermes_location(tmp_path: Path) -> None:
+    """A root whose only data is ``profiles/<name>/state.db`` must survive."""
+    home = tmp_path / "home"
+    profile = home / ".hermes" / "profiles" / "work"
+    profile.mkdir(parents=True)
+    (profile / "state.db").write_text("profile database")
+
+    roots = find_layout_roots(_context(home), HermesConnector.layout)
+
+    assert roots == (home / ".hermes",)
+
+
+def test_channel_and_package_roots_are_all_expanded(tmp_path: Path) -> None:
+    home, local = tmp_path / "home", tmp_path / "Local"
+    home.mkdir()
+    (local / "hermes").mkdir(parents=True)
+    (local / "hermes-beta").mkdir()
+    (local / "hermes" / "state.db").write_text("database")
+    (local / "hermes-beta" / "state.db").write_text("database")
+    package = local / "Packages" / "NousResearch.Hermes_abc" / "LocalCache" / "Local" / "hermes"
+    package.mkdir(parents=True)
+    (package / "state.db").write_text("database")
+
+    roots = find_layout_roots(_context(home, local), HermesConnector.layout)
+
+    assert set(roots) == {local / "hermes", local / "hermes-beta", package}
+
+
+def test_an_empty_home_stub_does_not_hide_data_on_another_drive(tmp_path: Path) -> None:
     home, other = tmp_path / "home", tmp_path / "other"
     (home / ".codex").mkdir(parents=True)
     (other / ".codex/sessions").mkdir(parents=True)
 
-    found = find_root(_context(home, other), "CODEX_HOME", ".codex", marker="sessions")
+    located = locate_locations(_context(home, other), CodexConnector.layout)
+    roots = find_layout_roots(_context(home, other), CodexConnector.layout)
 
-    assert found == other / ".codex"
-
-
-def test_find_root_keeps_home_when_no_root_has_the_marker(tmp_path: Path) -> None:
-    home, other = tmp_path / "home", tmp_path / "other"
-    (home / ".codex").mkdir(parents=True)
-    (other / ".codex").mkdir(parents=True)
-
-    assert find_root(_context(home, other), "CODEX_HOME", ".codex", marker="sessions") == home / ".codex"
+    # The stub is still reported as a location, but only the real one imports.
+    assert {location.path for location in located} == {home / ".codex", other / ".codex"}
+    assert roots == (other / ".codex",)
 
 
-def test_find_root_falls_back_to_the_home_default_when_nothing_exists(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-
-    assert find_root(_context(home, tmp_path / "x"), "CODEX_HOME", ".codex") == home / ".codex"
-
-
-def test_find_root_does_not_follow_symlinked_candidates(tmp_path: Path) -> None:
-    home, other = tmp_path / "home", tmp_path / "other"
-    real = tmp_path / "real"
-    (real / "sessions").mkdir(parents=True)
-    other.mkdir()
-    home.mkdir()
-    (other / ".codex").symlink_to(real)
-
-    assert find_root(_context(home, other), "CODEX_HOME", ".codex", marker="sessions") == home / ".codex"
-
-
-def test_override_wins_over_search_roots(tmp_path: Path) -> None:
+def test_override_replaces_search_roots(tmp_path: Path) -> None:
     home, other, custom = tmp_path / "home", tmp_path / "other", tmp_path / "custom"
     (other / ".codex/sessions").mkdir(parents=True)
-    custom.mkdir()
+    (custom / "sessions").mkdir(parents=True)
     home.mkdir()
     context = _context(home, other, environment={"CODEX_HOME": str(custom)})
 
-    assert find_root(context, "CODEX_HOME", ".codex", marker="sessions") == custom
+    assert find_layout_roots(context, CodexConnector.layout) == (custom,)
 
 
 def test_override_expands_windows_style_home_and_environment_variables(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home, drive = tmp_path / "home", tmp_path / "drive"
-    (home / "agents").mkdir(parents=True)
-    (drive / "data").mkdir(parents=True)
-    monkeypatch.setenv("TOKENHUB_TEST_DRIVE", str(drive))
-
+    (home / "agents" / "sessions").mkdir(parents=True)
+    (drive / "data" / "sessions").mkdir(parents=True)
     tilde = _context(home, environment={"CODEX_HOME": "~\\agents"})
-    variable = _context(home, environment={"CODEX_HOME": "$TOKENHUB_TEST_DRIVE/data"})
+    variable = _context(
+        home,
+        environment={
+            "CODEX_HOME": "$TOKENHUB_TEST_DRIVE/data",
+            "TOKENHUB_TEST_DRIVE": str(drive),
+        },
+    )
 
     if sys.platform == "win32":  # backslash is a path separator only on Windows
-        assert find_root(tilde, "CODEX_HOME", ".codex") == home / "agents"
-    assert find_root(variable, "CODEX_HOME", ".codex") == drive / "data"
+        assert find_layout_roots(tilde, CodexConnector.layout) == (home / "agents",)
+    assert find_layout_roots(variable, CodexConnector.layout) == (drive / "data",)
 
 
 def test_antigravity_found_under_a_secondary_root(tmp_path: Path) -> None:

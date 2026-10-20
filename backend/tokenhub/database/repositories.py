@@ -20,6 +20,7 @@ from tokenhub.database.models import (
     SyncCursorRecord,
     UsageEventRecord,
 )
+from tokenhub.discovery.ledger import ImportedSource, ImportLedger
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
     DashboardSummary,
@@ -105,6 +106,41 @@ class SourceRepository:
             {candidate.source_id: candidate for candidate in candidates}
         )
         return sources
+
+    def import_ledger(self) -> ImportLedger:
+        """Stored sources with the number of events each already contributed.
+
+        Read-only and independent of discovery: the ledger answers "have we
+        already imported this location" without walking the filesystem again.
+        """
+        counts: dict[str, int] = {
+            str(source_id): int(count)
+            for source_id, count in self.session.execute(
+                select(UsageEventRecord.source_id, func.count()).group_by(
+                    UsageEventRecord.source_id
+                )
+            ).all()
+        }
+        rows = self.session.execute(
+            select(
+                SourceRecord.source_id,
+                SourceRecord.connector_id,
+                SourceRecord.approved_root,
+                SourceRecord.approved_root_device,
+                SourceRecord.approved_root_inode,
+            )
+        ).all()
+        return ImportLedger(sources=tuple(
+            ImportedSource(
+                source_id=source_id,
+                connector_id=connector_id,
+                approved_root=approved_root,
+                device=device,
+                inode=inode,
+                events=counts.get(source_id, 0),
+            )
+            for source_id, connector_id, approved_root, device, inode in rows
+        ))
 
     def _existing_sources(self, source_ids: list[str]) -> dict[str, SourceRecord]:
         """Stored rows for these ids, read in chunks that fit SQLite's variable limit."""

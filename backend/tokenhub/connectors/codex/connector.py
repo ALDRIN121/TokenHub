@@ -12,9 +12,11 @@ from tokenhub.connectors.protocol import (
     DiscoveryContext,
     SafeSourceView,
     ScanResult,
-    find_root,
+    find_layout_roots,
+    locate_locations,
     memoized_sources,
 )
+from tokenhub.discovery.locations import AgentLayout
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
     Provider,
@@ -29,18 +31,32 @@ from tokenhub.security.paths import (
     stat_directory_entry,
 )
 
+#: Codex resolves ``CODEX_HOME`` for every data path and keeps active rollouts
+#: under ``sessions/`` with archived ones under ``archived_sessions/`` (both
+#: confirmed in the shipped Rust binary's doctor/state-db paths). Its own state
+#: database records which rollout files an external import produced, which is
+#: why TokenHub keeps a ledger for the same question.
+LAYOUT = AgentLayout(
+    agent_id="codex-local",
+    display_name="OpenAI Codex",
+    env_keys=("CODEX_HOME",),
+    names=(".codex",),
+    process_names=("codex",),
+    markers=("sessions", "archived_sessions"),
+)
+
 
 class CodexConnector:
     connector_id = "codex-local"
     display_name = "OpenAI Codex"
     provider = Provider.CODEX
+    layout = LAYOUT
 
     def detect(self, context: DiscoveryContext) -> DetectionResult:
         evidence: list[str] = []
         if context.which("codex") is not None:
             evidence.append("executable_on_path")
-        root = find_root(context, "CODEX_HOME", ".codex", marker="sessions", canonicalize=False)
-        if root.is_dir() and not root.is_symlink():
+        if locate_locations(context, LAYOUT):
             evidence.append("known_root_exists")
         sources = self.discover_sources(context)
         if sources:
@@ -58,23 +74,22 @@ class CodexConnector:
 
     @memoized_sources
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
-        root = find_root(context, "CODEX_HOME", ".codex", marker="sessions", canonicalize=False)
-        if root.is_symlink():
-            return []
         candidates: list[SourceDescriptor] = []
         # Keep each allowlisted usage folder independently pinned. An existing
-        # sessions grant cannot authorize its archived_sessions sibling.
-        for folder in ("sessions", "archived_sessions"):
-            sessions = root / folder
-            if not sessions.is_dir() or sessions.is_symlink():
-                continue
-            with anchor_directory(sessions) as approved_root:
-                candidates.extend(self._discover_anchored_sources(
-                    approved_root.path,
-                    approved_root.descriptor,
-                    approved_root.device,
-                    approved_root.inode,
-                ))
+        # sessions grant cannot authorize its archived_sessions sibling, and a
+        # grant for one agent home cannot authorize another.
+        for root in find_layout_roots(context, LAYOUT):
+            for folder in ("sessions", "archived_sessions"):
+                sessions = root / folder
+                if not sessions.is_dir() or sessions.is_symlink():
+                    continue
+                with anchor_directory(sessions) as approved_root:
+                    candidates.extend(self._discover_anchored_sources(
+                        approved_root.path,
+                        approved_root.descriptor,
+                        approved_root.device,
+                        approved_root.inode,
+                    ))
         return candidates
 
     def _discover_anchored_sources(
