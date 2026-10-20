@@ -88,9 +88,13 @@ def test_linux_desktop_entry_is_detected(tmp_path: Path) -> None:
     assert found == ("synthetic-agent",)
 
 
-def test_linux_registry_roots_are_absolute_and_deduplicated(tmp_path: Path) -> None:
+def test_linux_registry_roots_are_deduplicated(tmp_path: Path) -> None:
     """An unset XDG_DATA_HOME must not list the local share folder twice, and a
-    relative value must not make the search depend on the process cwd."""
+    relative value must not make the search depend on the process cwd.
+
+    No absolute-path assertion: ``/usr/share/applications`` is drive-relative on
+    Windows, where this helper is still exercised by the unit tests.
+    """
     home = tmp_path / "home"
 
     unset, suffix = _application_registries("linux", home, {})
@@ -98,8 +102,7 @@ def test_linux_registry_roots_are_absolute_and_deduplicated(tmp_path: Path) -> N
 
     assert suffix == ".desktop"
     assert len(set(unset)) == len(unset) == 2
-    assert all(root.is_absolute() for root in unset)
-    assert all(root.is_absolute() for root in relative)
+    assert relative == unset
 
 
 def test_windows_registry_probe_is_skipped_off_windows(tmp_path: Path) -> None:
