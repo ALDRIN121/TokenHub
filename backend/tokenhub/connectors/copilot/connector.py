@@ -4,7 +4,6 @@ import hashlib
 import os
 import re
 import stat
-import sys
 from pathlib import Path
 
 from tokenhub.connectors.copilot import PARSER_VERSION
@@ -14,9 +13,11 @@ from tokenhub.connectors.protocol import (
     DiscoveryContext,
     SafeSourceView,
     ScanResult,
-    find_root,
+    find_layout_roots,
+    locate_locations,
     memoized_sources,
 )
+from tokenhub.discovery.locations import AgentLayout, ApplicationHint
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
     Provider,
@@ -37,33 +38,56 @@ _SESSION_FILE = re.compile(
 )
 
 
-def _user_data_dir(context: DiscoveryContext) -> Path:
-    if sys.platform == "darwin":
-        names = ("Library/Application Support/Code",)
-    elif os.name == "nt":
-        roaming = context.environment.get("APPDATA", str(context.home / "AppData/Roaming"))
-        names = (str(Path(roaming) / "Code"), "AppData/Roaming/Code")
-    else:
-        config = context.environment.get("XDG_CONFIG_HOME", str(context.home / ".config"))
-        names = (str(Path(config) / "Code"), ".config/Code")
-    return find_root(
-        context, "VSCODE_USER_DATA_DIR", names, marker="User/workspaceStorage", canonicalize=False
-    )
+#: VS Code keeps user data per edition. Copilot chat sessions live under
+#: ``User/workspaceStorage/<hash>/chatSessions`` in whichever edition wrote them,
+#: and ``VSCODE_USER_DATA_DIR`` re-roots the stable edition.
+LAYOUT = AgentLayout(
+    agent_id="vscode-copilot-local",
+    display_name="VS Code Copilot",
+    env_keys=("VSCODE_USER_DATA_DIR",),
+    names=(
+        "Library/Application Support/Code",
+        ".config/Code",
+        "AppData/Roaming/Code",
+    ),
+    platform_names={
+        "darwin": ("~/Library/Application Support/Code",),
+        "win32": ("%APPDATA%/Code", "~/AppData/Roaming/Code"),
+        "linux": ("$XDG_CONFIG_HOME/Code", "~/.config/Code"),
+    },
+    # An Insiders or portable install keeps its own user-data directory; the
+    # installed bundle is what tells discovery to look there.
+    applications=(
+        ApplicationHint(
+            "Visual Studio Code - Insiders",
+            (
+                "~/Library/Application Support/Code - Insiders",
+                "%APPDATA%/Code - Insiders",
+                "$XDG_CONFIG_HOME/Code - Insiders",
+            ),
+        ),
+    ),
+    process_names=("code",),
+    markers=("User/workspaceStorage",),
+)
 
 
 class CopilotConnector:
     connector_id = "vscode-copilot-local"
     display_name = "VS Code Copilot"
     provider = Provider.VSCODE_COPILOT
+    layout = LAYOUT
 
     def detect(self, context: DiscoveryContext) -> DetectionResult:
-        user = _user_data_dir(context) / "User"
-        sessions = user / "workspaceStorage"
-        extension = user / "globalStorage" / "github.copilot-chat"
-        configured = extension.is_dir() and not extension.is_symlink()
+        roots = locate_locations(context, LAYOUT)
+        configured = any(
+            (root.path / "User" / "globalStorage" / "github.copilot-chat").is_dir()
+            and not (root.path / "User" / "globalStorage" / "github.copilot-chat").is_symlink()
+            for root in roots
+        )
         sources = self.discover_sources(context)
         evidence: list[str] = []
-        if sessions.is_dir() and not sessions.is_symlink() and (configured or sources):
+        if roots and (configured or sources):
             evidence.append("known_root_exists")
         if configured:
             evidence.append("configuration_found")
@@ -80,9 +104,15 @@ class CopilotConnector:
 
     @memoized_sources
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
-        root = _user_data_dir(context) / "User" / "workspaceStorage"
-        if not root.is_dir() or root.is_symlink():
-            return []
+        sources: list[SourceDescriptor] = []
+        for data_root in find_layout_roots(context, LAYOUT):
+            root = data_root / "User" / "workspaceStorage"
+            if not root.is_dir() or root.is_symlink():
+                continue
+            sources.extend(self._scan_workspace_storage(root))
+        return sources
+
+    def _scan_workspace_storage(self, root: Path) -> list[SourceDescriptor]:
         sources: list[SourceDescriptor] = []
         with anchor_directory(root) as anchored:
             for workspace in sorted(list_directory(anchored.descriptor)):
