@@ -12,6 +12,7 @@ from tokenhub.connectors.protocol import (
     DiscoveryContext,
     UsageConnector,
 )
+from tokenhub.discovery.locations import AgentLayout
 from tokenhub.domain.models import Provider, SourceState
 from tokenhub.ingestion.progress import ScanInterrupted, report
 
@@ -23,6 +24,19 @@ class ConnectorRegistry:
     @classmethod
     def default(cls) -> "ConnectorRegistry":
         return cls([ClaudeConnector(), CodexConnector(), HermesConnector(), CopilotConnector(), AntigravityConnector()])
+
+    def layouts(self) -> tuple[AgentLayout, ...]:
+        """Every agent's location layout, for host probes and the location report.
+
+        ``UsageConnector`` declares ``layout`` so a real connector cannot omit
+        it; the lookup stays tolerant because embedders and tests register
+        duck-typed connectors that only implement the four methods.
+        """
+        return tuple(
+            layout
+            for connector in self.connectors
+            if (layout := getattr(connector, "layout", None)) is not None
+        )
 
     def discover_all(self, context: DiscoveryContext) -> list[DetectionResult]:
         results: list[DetectionResult] = []

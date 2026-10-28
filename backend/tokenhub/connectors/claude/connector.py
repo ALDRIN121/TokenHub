@@ -12,9 +12,11 @@ from tokenhub.connectors.protocol import (
     DiscoveryContext,
     SafeSourceView,
     ScanResult,
-    find_root,
+    find_layout_roots,
+    locate_locations,
     memoized_sources,
 )
+from tokenhub.discovery.locations import AgentLayout
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
     Provider,
@@ -29,21 +31,40 @@ from tokenhub.security.paths import (
     stat_directory_entry,
 )
 
+#: Claude Code honours ``CLAUDE_CONFIG_DIR`` and requires it to be absolute
+#: (confirmed in the shipped 2.1.285 binary: "the configuration home
+#: (CLAUDE_CONFIG_DIR) is not an absolute path"). Sessions live in
+#: ``<config home>/projects/``. The variable must come from the shell — it is
+#: ignored inside a settings file — so a running process or an operator entry is
+#: the only way to learn about a relocated home.
+LAYOUT = AgentLayout(
+    agent_id="claude-code-local",
+    display_name="Claude Code",
+    env_keys=("CLAUDE_CONFIG_DIR",),
+    names=(".claude",),
+    process_names=("claude",),
+    markers=("projects",),
+)
+
 
 class ClaudeConnector:
     connector_id = "claude-code-local"
     display_name = "Claude Code"
     provider = Provider.CLAUDE_CODE
+    layout = LAYOUT
 
     def detect(self, context: DiscoveryContext) -> DetectionResult:
         evidence: list[str] = []
         if context.which("claude") is not None:
             evidence.append("executable_on_path")
-        root = find_root(context, "CLAUDE_CONFIG_DIR", ".claude", marker="projects", canonicalize=False)
-        if root.is_dir() and not root.is_symlink():
+        roots = locate_locations(context, LAYOUT)
+        if roots:
             evidence.append("known_root_exists")
-            settings = root / "settings.json"
-            if not settings.is_symlink() and settings.is_file():
+            if any(
+                (location.path / "settings.json").is_file()
+                and not (location.path / "settings.json").is_symlink()
+                for location in roots
+            ):
                 evidence.append("configuration_found")
         sources = self.discover_sources(context)
         if sources:
@@ -61,10 +82,15 @@ class ClaudeConnector:
 
     @memoized_sources
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
-        root = find_root(context, "CLAUDE_CONFIG_DIR", ".claude", marker="projects", canonicalize=False)
-        projects = root / "projects"
-        if root.is_symlink() or not projects.is_dir() or projects.is_symlink():
-            return []
+        candidates: list[SourceDescriptor] = []
+        for root in find_layout_roots(context, LAYOUT):
+            projects = root / "projects"
+            if root.is_symlink() or not projects.is_dir() or projects.is_symlink():
+                continue
+            candidates.extend(self._scan_projects(projects))
+        return candidates
+
+    def _scan_projects(self, projects: Path) -> list[SourceDescriptor]:
         candidates: list[SourceDescriptor] = []
         with anchor_directory(projects) as anchored:
 
