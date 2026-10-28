@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 
 import psutil
 import pytest
@@ -118,8 +119,9 @@ def test_slow_startup_becomes_ready_after_ten_seconds(tmp_path, monkeypatch):
     monkeypatch.setattr(module.subprocess, "Popen", lambda *a, **k: child)
     monkeypatch.setattr(module, "probe", lambda _: elapsed >= 15.0)
     monkeypatch.setattr(module, "_process_start_time", lambda _: 123.0)
-    monkeypatch.setattr(module.time, "monotonic", lambda: elapsed)
-    monkeypatch.setattr(module.time, "sleep", advance_time)
+    monkeypatch.setattr(
+        module, "time", SimpleNamespace(monotonic=lambda: elapsed, sleep=advance_time)
+    )
 
     assert RuntimeManager(tmp_path).start() == "http://127.0.0.1:7432/"
     assert not child.terminated and not child.waited
@@ -134,7 +136,9 @@ def test_foreign_listener_never_becomes_ready_and_new_child_is_cleaned(tmp_path,
     monkeypatch.setattr(module, "probe", lambda _: False)
     monkeypatch.setattr(module, "_process_start_time", lambda _: 123.0)
     clock = iter([0, 31])
-    monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        module, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=time.sleep)
+    )
     with pytest.raises(RuntimeError, match="runtime.log"):
         RuntimeManager(tmp_path).start()
     assert child.terminated and child.waited
@@ -296,7 +300,9 @@ def test_stop_retains_record_when_process_outlives_http_shutdown(tmp_path, monke
     monkeypatch.setattr(module, "probe", lambda _: next(probes))
     monkeypatch.setattr(module, "request_stop", lambda _: True)
     monkeypatch.setattr(module, "_recorded_process_alive", lambda _: True)
-    monkeypatch.setattr(module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        module, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=time.sleep)
+    )
     with pytest.raises(RuntimeError, match="did not stop in time"):
         RuntimeManager(tmp_path).stop()
     assert read_record(tmp_path) == record
