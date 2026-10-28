@@ -15,7 +15,9 @@ decides what is merged and merges changes after the required checks pass.
 
 ## Development setup
 
-Use Python 3.12 or newer, Node.js 22, and uv.
+Use Python 3.12 or newer, Node.js 22.22.2 or newer in the 22.x line, and uv.
+The frontend also supports Node.js 24.15+ and 26+; its `engines` field records
+the versions required by the test dependencies.
 
 ```bash
 uv sync --all-groups
