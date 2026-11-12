@@ -20,10 +20,15 @@ class DiscoveryService:
         registry: ConnectorRegistry,
         source_repository: SourceRepository,
         context: DiscoveryContext,
+        *,
+        context_provider: Callable[[], DiscoveryContext] | None = None,
     ) -> None:
         self.registry = registry
         self.source_repository = source_repository
         self.context = context
+        #: Rebuilds the host snapshot before a pass, so agents installed or
+        #: started after launch are found without restarting TokenHub.
+        self.context_provider = context_provider
         self._candidates: dict[str, SourceDescriptor] = {}
         self._last_results: list[DetectionResult] | None = None
         self._signature: tuple[object, ...] | None = None
@@ -36,6 +41,8 @@ class DiscoveryService:
         return self._last_results
 
     def discover(self) -> list[DetectionResult]:
+        if self.context_provider is not None:
+            self.context = self.context_provider()
         # One shared memo per pass: ``detect`` and ``discover_sources`` then walk
         # each provider tree once instead of twice.
         context = replace(self.context, source_memo={})

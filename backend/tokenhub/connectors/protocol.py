@@ -1,14 +1,20 @@
 """Provider-neutral connector contracts and path-free discovery results."""
 
 import functools
-import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import BaseModel, computed_field
 
+from tokenhub.discovery.locations import (
+    AgentLayout,
+    Location,
+    ProcessInfo,
+    resolve_locations,
+    validate_location,
+)
 from tokenhub.domain.models import (
     Confidence,
     Provider,
@@ -32,6 +38,12 @@ class DiscoveryContext:
     source_memo: dict[str, list[SourceDescriptor]] | None = field(
         default=None, compare=False, repr=False
     )
+    # Locations an operator added to TokenHub's own discovery file, by agent id.
+    locations: Mapping[str, tuple[Path, ...]] = field(default_factory=dict)
+    # Live agent processes reduced to their layout's environment keys.
+    processes: tuple[ProcessInfo, ...] = ()
+    # Installed applications, so layout metadata can point at custom directories.
+    applications: tuple[str, ...] = ()
 
 
 def memoized_sources(
@@ -107,6 +119,8 @@ class ScanResult:
 class UsageConnector(Protocol):
     connector_id: str
     display_name: str
+    #: Where this agent may keep its data; see ``discovery.locations``.
+    layout: AgentLayout
 
     def detect(self, context: DiscoveryContext) -> DetectionResult: ...
 
@@ -119,67 +133,40 @@ class UsageConnector(Protocol):
     def capabilities(self) -> ConnectorCapabilities: ...
 
 
-def _override_directory(
-    context: DiscoveryContext, override_key: str, canonicalize: bool
-) -> Path | None:
-    """The env override when it names an existing, non-symlink directory."""
-    override = context.environment.get(override_key)
-    if not override:
-        return None
-    if override == "~":
-        candidate = context.home
-    elif override.startswith(("~/", "~\\")):
-        candidate = context.home / override[2:]
-    else:
-        candidate = Path(os.path.expandvars(override))
-    if candidate.is_dir() and not candidate.is_symlink():
-        if canonicalize:
-            return candidate.resolve(strict=True)
-        if candidate.is_absolute():
-            return candidate
-    return None
+def _resolve(context: DiscoveryContext, layout: AgentLayout) -> tuple[Location, ...]:
+    return resolve_locations(
+        layout,
+        context.home,
+        context.environment,
+        search_roots=context.search_roots,
+        user_locations=context.locations.get(layout.agent_id, ()),
+        processes=context.processes,
+        installed_applications=context.applications,
+    )
 
 
-def find_root(
-    context: DiscoveryContext,
-    override_key: str,
-    default_names: str | Sequence[str],
-    *,
-    marker: str | None = None,
-    canonicalize: bool = True,
-) -> Path:
-    """Locate an agent's data root under an injected override, home or search roots.
+def locate_locations(
+    context: DiscoveryContext, layout: AgentLayout
+) -> tuple[Location, ...]:
+    """Every existing directory this agent may be reading, with its origin.
 
-    The env override wins. Otherwise each ``default_names`` entry is tried
-    under ``home`` and then every search root, preferring a directory that
-    contains ``marker`` (so an empty stub at home does not hide real data on
-    another drive), then any existing directory. With no match the
-    ``home``-relative first name is returned, as before.
+    These are *candidates*: existence is not validity, so presence detection
+    uses this instead of :func:`find_layout_roots`. A freshly installed agent
+    with only a settings file is present, yet holds nothing to import.
     """
-    override = _override_directory(context, override_key, canonicalize)
-    if override is not None:
-        return override
-    names = (default_names,) if isinstance(default_names, str) else tuple(default_names)
-    candidates = [
-        base / name for base in (context.home, *context.search_roots) for name in names
-    ]
-    usable = [path for path in candidates if path.is_dir() and not path.is_symlink()]
-    if marker is not None:
-        for path in usable:
-            if (path / marker).exists():
-                return path
-    if usable:
-        return usable[0]
-    return context.home / names[0]
+    return _resolve(context, layout)
 
 
-def select_root(
-    context: DiscoveryContext,
-    override_key: str,
-    default_name: str,
-    *,
-    canonicalize: bool = True,
-) -> Path:
-    """Use an existing injected override directory or the injected home root."""
-    override = _override_directory(context, override_key, canonicalize)
-    return override if override is not None else context.home / default_name
+def find_layout_roots(context: DiscoveryContext, layout: AgentLayout) -> tuple[Path, ...]:
+    """Every location this agent's own layout validates, most-specific first.
+
+    An agent can legitimately keep data in a default home *and* an
+    operator-declared folder
+    (a second profile, another drive, a work volume), and each of those is a
+    separate importable source rather than a fallback for the previous one.
+    """
+    return tuple(
+        location.path
+        for location in _resolve(context, layout)
+        if validate_location(layout, location).usable
+    )

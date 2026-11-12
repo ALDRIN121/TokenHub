@@ -175,6 +175,44 @@ def discovery(request: Request, include_sources: bool = True) -> dict[str, objec
     }
 
 
+@router.get("/discovery/locations")
+def discovery_locations(request: Request) -> dict[str, object]:
+    """Where each agent's data may be, whether it is real, and if imported.
+
+    Each location is reported by origin, evidence and validation state only.
+    Absolute paths stay in the process that validated them, matching the
+    path-free contract of the rest of ``/api/v1``.
+    """
+    container = container_for(request)
+    engine = container.discovery_engine()
+    with container.read_services() as services:
+        answers = engine.answers(services.source_repository.import_ledger())
+    return {
+        "providers": [
+            {
+                "connector_id": answer.agent_id,
+                "display_name": answer.display_name,
+                "location_count": len(answer.locations),
+                "importable_count": len(answer.importable),
+                "imported_count": len(answer.already_imported),
+                "pending_count": len(answer.pending),
+                "locations": [
+                    {
+                        "origin": entry.origin.value,
+                        "evidence": entry.evidence,
+                        "state": entry.state.value,
+                        "markers": list(entry.markers),
+                        "already_imported": entry.imported,
+                        "imported_events": entry.imported_events,
+                    }
+                    for entry in answer.locations
+                ],
+            }
+            for answer in answers
+        ]
+    }
+
+
 @router.get("/collection")
 def collection_status(request: Request) -> dict[str, object]:
     container = container_for(request)
