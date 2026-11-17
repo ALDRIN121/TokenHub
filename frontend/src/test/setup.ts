@@ -40,7 +40,7 @@ function installBrowserFetchShim(): void {
 }
 
 beforeAll(() => {
-  server.listen({ onUnhandledRequest: 'error' });
+  server.listen({ onUnhandledFrame: 'error' });
   installBrowserFetchShim();
 });
 
