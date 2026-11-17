@@ -11,9 +11,11 @@ from tokenhub.connectors.protocol import (
     DiscoveryContext,
     SafeSourceView,
     ScanResult,
-    find_root,
+    find_layout_roots,
+    locate_locations,
     memoized_sources,
 )
+from tokenhub.discovery.locations import AgentLayout
 from tokenhub.domain.models import (
     APPROVED_SOURCE_STATES,
     Provider,
@@ -25,6 +27,18 @@ from tokenhub.security.paths import (
     anchor_directory,
     list_directory,
     stat_directory_entry,
+)
+
+#: Antigravity's CLI and desktop app both keep conversations under its Gemini
+#: home: ``conversations/`` holds the encrypted ``.pb`` files plus the ``.db``
+#: databases TokenHub reads, and ``conversation_summaries.db`` is the index.
+LAYOUT = AgentLayout(
+    agent_id="antigravity-local",
+    display_name="Antigravity",
+    env_keys=("ANTIGRAVITY_HOME",),
+    names=(".gemini/antigravity",),
+    process_names=("antigravity",),
+    markers=("conversations", "conversation_summaries.db"),
 )
 
 
@@ -49,18 +63,17 @@ class AntigravityConnector:
     connector_id = "antigravity-local"
     display_name = "Antigravity"
     provider = Provider.ANTIGRAVITY
+    layout = LAYOUT
 
     def detect(self, context: DiscoveryContext) -> DetectionResult:
-        root = find_root(
-            context, "ANTIGRAVITY_HOME", ".gemini/antigravity", marker="conversations", canonicalize=False
-        )
+        roots = locate_locations(context, LAYOUT)
         evidence = []
-        if root.is_dir() and not root.is_symlink():
+        if roots:
             evidence.append("known_root_exists")
         sources = self.discover_sources(context)
         if sources:
             evidence.append("session_source_found")
-        elif _has_unreadable_conversations(root):
+        elif any(_has_unreadable_conversations(root.path) for root in roots):
             evidence.append("unsupported_session_format")
         return DetectionResult(
             connector_id=self.connector_id,
@@ -73,11 +86,15 @@ class AntigravityConnector:
 
     @memoized_sources
     def discover_sources(self, context: DiscoveryContext) -> list[SourceDescriptor]:
-        root = find_root(
-            context, "ANTIGRAVITY_HOME", ".gemini/antigravity", marker="conversations", canonicalize=False
-        ) / "conversations"
-        if not root.is_dir() or root.is_symlink():
-            return []
+        sources = []
+        for data_root in find_layout_roots(context, LAYOUT):
+            conversations = data_root / "conversations"
+            if not conversations.is_dir() or conversations.is_symlink():
+                continue
+            sources.extend(self._scan_conversations(conversations))
+        return sources
+
+    def _scan_conversations(self, root: Path) -> list[SourceDescriptor]:
         sources = []
         with anchor_directory(root) as anchored:
             for name in sorted(list_directory(anchored.descriptor)):

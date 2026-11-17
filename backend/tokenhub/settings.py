@@ -58,3 +58,9 @@ class TokenHubSettings:
         """User-editable pricing file, overridable for tests and shared installs."""
         override = os.environ.get("TOKENHUB_PRICING_FILE")
         return Path(override) if override else self.data_directory / "pricing.json"
+
+    @property
+    def discovery_file(self) -> Path:
+        """Optional operator file that adds extra locations per agent."""
+        override = os.environ.get("TOKENHUB_DISCOVERY_FILE")
+        return Path(override) if override else self.data_directory / "discovery.json"

@@ -24,6 +24,12 @@ from tokenhub.connectors.roots import candidate_roots
 from tokenhub.database.migrations import run_migrations
 from tokenhub.database.repositories import SourceRepository, UsageRepository
 from tokenhub.database.session import create_engine_for, optimize_database
+from tokenhub.discovery.engine import DiscoveryEngine
+from tokenhub.discovery.host import (
+    installed_applications,
+    read_user_location_config,
+    running_agents,
+)
 from tokenhub.discovery.service import DiscoveryService
 from tokenhub.domain.models import ImportOutcome, RebuildOutcome
 from tokenhub.ingestion.collection import CollectionService
@@ -103,14 +109,58 @@ class Container:
     def discovery_context(self) -> DiscoveryContext:
         if self._discovery_context is not None:
             return self._discovery_context
-        home = self.settings.home_directory
-        return DiscoveryContext(home, os.environ, shutil.which, candidate_roots(os.environ, home))
+        return self.host_discovery_context()
 
     @discovery_context.setter
     def discovery_context(self, context: DiscoveryContext) -> None:
         self._discovery_context = context
         if self._services is not None:
             self._services.discovery.context = context
+
+    def host_discovery_context(self) -> DiscoveryContext:
+        """A fresh host snapshot: locations, live agents, installed apps.
+
+        Cheap enough to rebuild every discovery pass, which is what lets
+        TokenHub notice an agent installed or started while it is already
+        running. A test-injected context still wins, so nothing here can leak
+        into a synthetic home.
+        """
+        if self._discovery_context is not None:
+            # An injected context (tests, an embedder) is authoritative: host
+            # probes must never widen it to the real machine.
+            return self._discovery_context
+        home = self.settings.home_directory
+        environment = os.environ
+        layouts = ConnectorRegistry.default().layouts()
+        process_names = tuple(name for layout in layouts for name in layout.process_names)
+        environment_keys = tuple(key for layout in layouts for key in layout.env_keys)
+        application_names = tuple(
+            hint.name for layout in layouts for hint in layout.applications
+        )
+        return DiscoveryContext(
+            home,
+            environment,
+            shutil.which,
+            candidate_roots(environment, home),
+            locations=read_user_location_config(self.settings.discovery_file, home=home),
+            processes=running_agents(process_names, environment_keys),
+            applications=installed_applications(
+                application_names, home=home, environment=environment
+            ),
+        )
+
+    def discovery_engine(self) -> DiscoveryEngine:
+        """The three-question view of this host, built from the live context."""
+        context = self.discovery_context
+        return DiscoveryEngine.for_layouts(
+            ConnectorRegistry.default().layouts(),
+            home=context.home,
+            environment=context.environment,
+            search_roots=context.search_roots,
+            user_locations=context.locations,
+            processes=context.processes,
+            installed_applications=context.applications,
+        )
 
     def pricing_table(self) -> PricingTable:
         """Reload the editable pricing file when its mtime changes."""
@@ -129,7 +179,9 @@ class Container:
         registry = ConnectorRegistry.default()
         sources = SourceRepository(session)
         usage = UsageRepository(session)
-        discovery = DiscoveryService(registry, sources, self.discovery_context)
+        discovery = DiscoveryService(
+            registry, sources, self.discovery_context, context_provider=self.host_discovery_context
+        )
         ingestion = IngestionService(sources, usage, registry)
         collection = CollectionService(sources, usage, discovery, ingestion)
         return Services(session, sources, usage, discovery, ingestion,

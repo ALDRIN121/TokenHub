@@ -113,8 +113,10 @@ resumed/forked session files is counted once, and later usage updates replace
 the session's previous normalized records. Hermes reads
 only allowlisted session identifiers, timestamps, and token counters from a
 no-follow snapshot of `state.db` and its journal; no provider database is written.
-Each Hermes session contributes once, with running totals replaced atomically as
-they change. Cache reads and writes are included in the input total for Claude
+The default profile at `<root>/state.db` and each named profile at
+`<root>/profiles/<name>/state.db` are separate sources, so they can be approved
+independently. Each Hermes session contributes once, with running totals replaced
+atomically as they change. Cache reads and writes are included in the input total for Claude
 and Hermes because both store them in separate buckets. Hermes session
 contributions are marked `high` quality; Claude message usage is marked `exact`.
 
@@ -141,16 +143,66 @@ that key, so it says so instead of showing an empty source. `ANTIGRAVITY_HOME` c
 
 Each agent keeps a fixed folder layout (`.claude`, `.codex`, `.hermes`,
 `.gemini/antigravity`, VS Code's `Code/User`), but the folder it sits under can
-differ, for example on Windows when a profile lives on another drive or is
-redirected. TokenHub checks, in order: the agent's environment override
-(`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HERMES_HOME`, `ANTIGRAVITY_HOME`,
-`VSCODE_USER_DATA_DIR`), your home directory, `USERPROFILE`, `APPDATA` and
-`LOCALAPPDATA` (Windows) or `XDG_CONFIG_HOME` and `XDG_DATA_HOME` (Linux), and on
-Windows `<drive>:\Users\<you>` for each drive present. A location that already
-holds session data wins over an empty folder at home. Only your own locations are
-checked, nothing is crawled, and symlinked folders are never followed. Overrides
-accept `~/`, `~\` and environment variables such as `%USERPROFILE%`. Anything
-found this way still needs your approval before it is imported.
+differ: a Windows profile on another drive, a redirected profile, or an agent
+started from a wrapper with its own home.
+
+Discovery resolves locations in layers, most specific first, and every layer
+that validates becomes its own importable source — two installs are two
+sources, not one fallback for the other:
+
+1. **The agent's own environment override** — `CLAUDE_CONFIG_DIR`,
+   `CODEX_HOME`, `HERMES_HOME`, `ANTIGRAVITY_HOME`, `VSCODE_USER_DATA_DIR`. A
+   resolvable override replaces layers 5 (platform and home defaults, and the
+   other drives searched last), exactly as the agent stops reading its default;
+   `~` and variables such as `%USERPROFILE%` are expanded. Layers 2–4 stay
+   additive: they are separate installs and profiles, not fallbacks.
+2. **Your own locations** from `~/.tokenhub/discovery.json` (see below).
+3. **A running agent process**, when it belongs to you and is readable, so an
+   install started from a script that never exported its variable is still
+   found. Only the variables a layout names are read from that process.
+4. **Installed-application metadata** — an app bundle, desktop entry or Windows
+   uninstall entry that implies a data directory outside the default, such as
+   VS Code Insiders. A platform entry in a layout *replaces* its generic names:
+   the macOS and Windows user-data directories are alternatives, not both.
+5. **Platform and home defaults** — your home directory, `USERPROFILE`,
+   `APPDATA` and `LOCALAPPDATA` (Windows) or `XDG_CONFIG_HOME` and
+   `XDG_DATA_HOME` (Linux), and on Windows the `Users` folder for your own
+   account on each drive present. Hermes is checked under both `.hermes` and
+   `hermes` in every base — including channel-suffixed roots such as
+   `hermes-dev` and MSIX package `LocalCache` paths — because Windows installs
+   keep data under `%LOCALAPPDATA%\hermes` rather than a dotted folder. Named
+   Hermes profiles are discovered under `profiles/*`.
+
+A location is offered for import only when it holds the agent's own marker
+(`projects`, `sessions`, `User/workspaceStorage`, `conversations`, `state.db`,
+…). Discovery stats names only and never opens a provider file, so a present but
+empty folder is reported as `empty`, a folder with unrelated contents as
+`unrecognized`, and a symlinked folder is never followed. Anything that
+validates still needs your approval before it is imported.
+
+Add a location the defaults cannot know about — a work volume, an archive, a
+second checkout — in `~/.tokenhub/discovery.json` (override the path with
+`TOKENHUB_DISCOVERY_FILE`):
+
+```json
+{
+  "agents": {
+    "codex-local": { "locations": ["/Volumes/work/codex-home"] },
+    "claude-code-local": { "locations": ["~/archive/claude"] }
+  }
+}
+```
+
+Agent ids are the connector ids TokenHub reports (`codex-local`,
+`claude-code-local`, `hermes-local`, `vscode-copilot-local`,
+`antigravity-local`). Relative entries and entries containing `..` are ignored.
+
+`GET /api/v1/discovery/locations` answers the three discovery questions per
+agent without exposing a path: for every candidate location it reports the
+`origin`, the `evidence` code, the validation `state` and its markers, and
+whether TokenHub has `already_imported` it, with the event count. Import
+identity is the directory itself — device and inode, plus the stored approved
+root — so a folder that moved or gained a second spelling is not imported twice.
 
 ## Discovery and approval
 
